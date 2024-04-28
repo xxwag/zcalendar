@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "848071756712",
+    "project_id": "zcalendar-419022",
+    "storage_bucket": "zcalendar-419022.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:848071756712:android:51458ffec08a282e0b2b9d",
+        "android_client_info": {
+          "package_name": "com.gg.zcal"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCUq7dvO8pE4v-DOArIjvtcmehHjO4iptI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,9 @@
+<!-- res/values/strings.xml -->
+<resources>
+
+  <string name="hello_world"> Big Gang Shit </string>
+   <string translatable="false"  name="default_web_client_id">446412900874-ifkm836l5ftprj362groq3q3gd5brq3c.apps.googleusercontent.com</string>
+  <string translatable="false"  name="game_services_project_id">446412900874</string>
+    
+
+</resources>
