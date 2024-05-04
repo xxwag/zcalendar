@@ -150,6 +150,8 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
   bool groupByCountry = false; // This will track the toggle state
   static const int debounceMillis = 1000; // Debounce time for gestures
   Map<DateTime, List<Event>> events = {};
+  Set<DateTime> holidays = {};
+
   String userAuthorizationLevel = ''; // Move userAuthorizationLevel here
   String? userToken; // Add userToken here
   List<String>? selectedCountries;
@@ -190,6 +192,9 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
             const TimeOfDay(hour: 15, minute: 0)), // Friday: 9:00 AM to 3:00 PM
     // Add other days as needed
   };
+// Directly compute startYear and endYear based on the current time
+  DateTime startDateTime = DateTime(DateTime.now().year - 30, 1, 1);
+  DateTime endDateTime = DateTime(DateTime.now().year + 30, 12, 31, 23, 59, 59);
 
   Map<String, String> seasonImages = {
     'Winter': 'initial_image_url_for_winter',
@@ -206,11 +211,11 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
   @override
   void initState() {
     selectedDaysNotifier = ValueNotifier<Set<DateTime>>({});
-
+    _loadData();
     _fetchUserAuthorizationLevel();
     _performMaintenanceCheck(context);
     // _loadEvents();
-    _loadData();
+
     _preloadSeasonImages();
 
     super.initState();
@@ -712,7 +717,7 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
             if (createData) {
               await _createCalendarTableAndData(context, userToken!);
             }
-            await _loadEvents();
+            await _loadEvents(startDateTime, endDateTime);
             if (mounted) {
               setState(() {
                 _dataLoaded = true;
@@ -818,218 +823,82 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
   Future<void> _loadData() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     String mode = prefs.getString('mode') ?? 'offline';
+
     if (mode == 'online') {
-      await _loadEvents();
+      // Pass the DateTime range to _loadEvents
+      await _loadEvents(startDateTime, endDateTime);
     } else {
-      await _loadDataFromSQLite();
+      // Pass the DateTime range to _loadDataFromSQLite
+      await _loadDataFromSQLite(startDateTime, endDateTime);
     }
   }
 
-  Future<void> _loadEvents() async {
+  Future<void> _loadEvents(DateTime startYear, DateTime endYear) async {
     try {
-      // Access the /fetchEvents endpoint via the ngrok tunnel
       final response =
           await http.get(Uri.parse('${NgrokManager.ngrokUrl}/api/fetchEvents'));
-
       if (response.statusCode == 200) {
-        final List<Map<String, dynamic>> fetchedData =
-            List<Map<String, dynamic>>.from(
-                jsonDecode(response.body)['results']);
-
-        // Map to track holiday types and their corresponding origin
-        final Map<String, String> holidayTypesWithOrigin = {};
-
+        List<dynamic> fetchedData = jsonDecode(response.body)['results'];
         for (var entry in fetchedData) {
-          String holidayType = entry['event_name'];
-          String origin = entry['origin'];
+          DateTime eventDate = DateTime.parse(entry['event_date']);
+          Event newEvent = Event(
+            title: entry['event_name'],
+            date: eventDate,
+            isPrivate: entry['private'] == 1,
+            isAllDay:
+                entry['event_time'].isEmpty && entry['event_time_end'].isEmpty,
+            startTime: entry['event_time'],
+            endTime: entry['event_time_end'],
+            flagUrl: entry['flag_url'],
+            username: entry['username'],
+          );
 
-          // Only add unique holiday types with their origin
-          if (!holidayTypesWithOrigin.containsKey(holidayType)) {
-            holidayTypesWithOrigin[holidayType] = origin;
-          }
-        }
-
-        // Extract unique country codes or names from the map
-        final Set<String> origins = holidayTypesWithOrigin.values.toSet();
-
-        // Fetch flag URLs for these origins
-        final flagsResponse = await http.get(Uri.parse(
-            '${NgrokManager.ngrokUrl}/api/fetchFlags?code=${origins.join(',')}'));
-        final Map<String, String> flagsMap = {};
-
-        if (flagsResponse.statusCode == 200) {
-          final List<Map<String, dynamic>> flagsData =
-              List<Map<String, dynamic>>.from(
-                  jsonDecode(flagsResponse.body)['results']);
-
-          for (var flagEntry in flagsData) {
-            flagsMap[flagEntry['code']] = flagEntry['flag'];
-          }
-        }
-        Map<DateTime, List<Event>> fetchedEvents = {};
-
-        for (var entry in fetchedData) {
-          // Skip if this holiday type is already processed with a different origin
-          if (holidayTypesWithOrigin[entry['event_name']] != entry['origin']) {
-            continue;
-          }
-
-          DateTime eventDate = DateTime.parse(entry['event_date'].toString());
-          bool isPrivate = entry['private'] == 1;
-
-          String startTime = entry['event_time'] ?? "";
-          String endTime = entry['event_time_end'] ?? "";
-
-          bool isAllDayEvent = startTime.isEmpty && endTime.isEmpty;
-
-          // Set the event for each year from 2010 to 2030
-          for (int year = 2010; year <= 2030; year++) {
-            DateTime yearlyEventDate =
-                DateTime(year, eventDate.month, eventDate.day);
-
-            // Safely get the flag URL with a fallback for null values
-            String? flagUrl =
-                flagsMap[holidayTypesWithOrigin[entry['event_name']]];
-
-            Event eventToAdd = Event(
-              title: entry['event_name'],
-              isPrivate: isPrivate,
-              date: eventDate, // Directly use the parsed DateTime object
-              isAllDay: isAllDayEvent,
-              startTime: isAllDayEvent ? null : startTime,
-              endTime: isAllDayEvent ? null : endTime,
-              flagUrl: flagUrl ??
-                  'https://verde.io/wp-content/uploads/2016/07/fakeflag-eu1-rr3-cv4.png',
-              username: '', // Fallback to local asset
-            );
-
-            // Add the event to the fetchedEvents map
-            if (fetchedEvents.containsKey(yearlyEventDate)) {
-              fetchedEvents[yearlyEventDate]!.add(eventToAdd);
-            } else {
-              fetchedEvents[yearlyEventDate] = [eventToAdd];
+          if (newEvent.isPrivate) {
+            // Add this holiday for each year in the range
+            for (int year = startYear.year; year <= endYear.year; year++) {
+              DateTime repeatingHoliday =
+                  DateTime.utc(year, eventDate.month, eventDate.day);
+              holidays.add(repeatingHoliday);
             }
+          } else {
+            events.putIfAbsent(eventDate, () => []).add(newEvent);
           }
         }
-
-        // Dummy events for the current day
-        DateTime today = DateTime.now();
-        Event dummyEvent1 = Event(
-          title: "Morning Meeting",
-          isPrivate: false,
-          isAllDay: false,
-          date: today, // Use the 'today' DateTime object
-          startTime: "5:00",
-          endTime: "12:00",
-          flagUrl:
-              'https://verde.io/wp-content/uploads/2016/07/fakeflag-eu1-rr3-cv4.png',
-          username: '', // Default flag URL
-        );
-
-        Event dummyEvent2 = Event(
-          title: "Lunch Break",
-          isPrivate: false,
-          isAllDay: false,
-          date: today, // Use the 'today' DateTime object
-          startTime: "12:00",
-          endTime: "13:00",
-          flagUrl:
-              'https://verde.io/wp-content/uploads/2016/07/fakeflag-eu1-rr3-cv4.png',
-          username: '', // Default flag URL
-        );
-
-        // Add dummy events to today's date
-        if (fetchedEvents.containsKey(today)) {
-          fetchedEvents[today]!.addAll([dummyEvent1, dummyEvent2]);
-        } else {
-          fetchedEvents[today] = [dummyEvent1, dummyEvent2];
-        }
-
-        setState(() {
-          events = fetchedEvents;
-        });
-
-        // Sample print statements for debugging (can be removed or commented out in production)
-        if (fetchedEvents.isNotEmpty) {
-          fetchedEvents.entries.firstWhere(
-              (entry) => entry.value.any((event) => event.isAllDay),
-              orElse: () => MapEntry(DateTime.now(), []));
-        }
-      } else {}
-    } catch (e) {}
+      } else {
+        print('Failed to load events with status code: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Failed to load events: $e');
+    }
   }
 
-  Future<void> _loadDataFromSQLite() async {
+  Future<void> _loadDataFromSQLite(DateTime startYear, DateTime endYear) async {
     try {
       List<Event> eventsFromDB = await DatabaseHelper.instance.fetchEvents();
-      //   print("Fetched ${eventsFromDB.length} events from SQLite.");
+      print("Fetched ${eventsFromDB.length} events from SQLite.");
 
-      DateTime today = DateTime.now();
-      int currentYear = today.year;
-
-      // Define dummy events that will always be added
-      List<Event> dummyEvents = [
-        Event(
-          title: "Morning Meeting",
-          isPrivate: false,
-          isAllDay: false,
-          date: DateTime(
-              currentYear, today.month, today.day, 5, 0), // at 5:00 AM today
-          startTime: "5:00",
-          endTime: "12:00",
-          flagUrl:
-              'https://verde.io/wp-content/uploads/2016/07/fakeflag-eu1-rr3-cv4.png',
-          username: 'user1',
-        ),
-        Event(
-          title: "Lunch Break",
-          isPrivate: false,
-          isAllDay: false,
-          date: DateTime(
-              currentYear, today.month, today.day, 12, 0), // at 12:00 PM today
-          startTime: "12:00",
-          endTime: "13:00",
-          flagUrl:
-              'https://verde.io/wp-content/uploads/2016/07/fakeflag-eu1-rr3-cv4.png',
-          username: 'user2',
-        ),
-      ];
-
-      // Always add dummy events to the main events list
-      List<Event> combinedEvents = List.from(eventsFromDB)..addAll(dummyEvents);
-
-      Map<DateTime, List<Event>> structuredEvents = {};
-
-      // Process each event to possibly recur annually and add to structuredEvents
-      for (Event event in combinedEvents) {
-        // print("Event: ${event.title}, Date: ${event.date} (All day: ${event.isAllDay})");
+      for (var event in eventsFromDB) {
+        if (event.date == null) {
+          print("Skipping event with null date: ${event.title}");
+          continue;
+        }
 
         DateTime eventDate =
-            event.date ?? today; // Ensure event.date is not null
-
-        for (int year = currentYear; year <= currentYear + 15; year++) {
-          DateTime newEventDate = DateTime(year, eventDate.month, eventDate.day,
-              eventDate.hour, eventDate.minute);
-          Event newEvent = Event(
-            id: event.id,
-            title: event.title,
-            isPrivate: event.isPrivate,
-            isAllDay: event.isAllDay,
-            date: newEventDate,
-            startTime: event.startTime,
-            endTime: event.endTime,
-            flagUrl: event.flagUrl,
-            username: event.username,
-          );
-          structuredEvents.putIfAbsent(newEventDate, () => []).add(newEvent);
+            DateTime(event.date!.year, event.date!.month, event.date!.day);
+        if (event.isPrivate) {
+          // Repeat this holiday for each year within the specified range
+          for (int year = startYear.year; year <= endYear.year; year++) {
+            DateTime repeatedHoliday =
+                DateTime.utc(year, eventDate.month, eventDate.day);
+            holidays.add(repeatedHoliday);
+          }
+        } else {
+          events.putIfAbsent(eventDate, () => []).add(event);
         }
       }
 
-      // Update the state with the structured events
-      setState(() {
-        events = structuredEvents;
-        print("Events structured and loaded into the calendar.");
-      });
+      print(
+          "Total events from SQLite: ${events.length}, Holidays: ${holidays.length}");
     } catch (e) {
       print("Error loading events from SQLite: $e");
     }
@@ -1863,6 +1732,45 @@ VALUES $values;
     }
   }
 
+  Future<Set<DateTime>> getHolidayDates() async {
+    List<Event> events =
+        await getAllEvents(); // Fetches all events using the unified method.
+    Set<DateTime> holidays = {};
+    for (Event event in events) {
+      if (event.isPrivate && event.date != null) {
+        holidays.add(event.date!);
+      }
+    }
+    return holidays;
+  }
+
+  Future<List<Event>> getAllEvents() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String mode = prefs.getString('mode') ?? 'offline';
+
+    if (mode == 'online') {
+      return await fetchEventsOnline();
+    } else {
+      return await DatabaseHelper.instance.fetchEvents();
+    }
+  }
+
+  Future<List<Event>> fetchEventsOnline() async {
+    List<Event> events = [];
+    try {
+      final response =
+          await http.get(Uri.parse('${NgrokManager.ngrokUrl}/api/fetchEvents'));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body)['results'] as List;
+        events =
+            data.map((e) => Event.fromMap(e as Map<String, dynamic>)).toList();
+      }
+    } catch (e) {
+      print("Failed to fetch events: $e");
+    }
+    return events;
+  }
+
   Widget buildCalendar() {
     return Container(
       key: _calendarKey,
@@ -1905,7 +1813,16 @@ VALUES $values;
                           const Duration(milliseconds: 250),
                       formatAnimationCurve: Curves.easeInOut,
                       onFormatChanged: _onFormatChanged,
-                      eventLoader: (day) => events[day] ?? [],
+                      holidayPredicate: (day) => holidays.contains(day),
+                      onPageChanged: (focusedDay) {
+                        // Set the focus to the first day of the current month when the page changes
+                        DateTime firstDayOfNewMonth =
+                            DateTime(focusedDay.year, focusedDay.month, 1);
+                        setState(() {
+                          _focusedDay = firstDayOfNewMonth;
+                        });
+                      },
+                      eventLoader: _getEventsForDay,
                       calendarBuilders: CalendarBuilders(
                         defaultBuilder: (context, date, _) => CalendarDayCell(
                           key: ValueKey(
@@ -1915,6 +1832,12 @@ VALUES $values;
                           selectedDaysNotifier: selectedDaysNotifier,
                           isGroupSelectionEnabled: _isGroupSelectionEnabled,
                           isFocused: isSameDay(date, _focusedDay),
+                          isHoliday: (DateTime date) {
+                            DateTime normalizedDate =
+                                DateTime(date.year, date.month, date.day);
+                            return holidays.contains(normalizedDate);
+                          },
+
                           onDayFocused: (DateTime focusedDate) {
                             setState(() {
                               _focusedDay =
@@ -1926,6 +1849,7 @@ VALUES $values;
                               }
                             });
                           },
+
                           onDaySelected: (DateTime selectedDate) {
                             if (_isGroupSelectionEnabled) {
                               toggleSelectedDay(
@@ -1959,8 +1883,28 @@ VALUES $values;
                           context,
                           date,
                         ),
-                        holidayBuilder: (context, date, _) =>
-                            _buildHolidayCell(context, date),
+                        holidayBuilder: (context, date, _) {
+                          print("Attempting to build holiday cell for $date");
+                          if (holidays.contains(normalizeDate(date))) {
+                            print("Building holiday cell for $date");
+                            return Container(
+                              decoration: BoxDecoration(
+                                  color: Colors.red[300],
+                                  borderRadius: BorderRadius.circular(8)),
+                              child: Center(
+                                child: Text(
+                                  '${date.day}',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            );
+                          } else {
+                            return Container(); // Fallback if not a holiday
+                          }
+                        },
                         outsideBuilder: (context, date, _) =>
                             _buildOutsideCell(context, date),
                         rangeStartBuilder: (context, date, _) =>
@@ -1973,32 +1917,7 @@ VALUES $values;
                             _buildDisabledCell(context, date),
                         markerBuilder: markerBuilder,
                       ),
-                      onDaySelected: (selectedDay, focusedDay) {
-                        if (!selectedDaysNotifier.value.contains(selectedDay)) {
-                          selectedDaysNotifier.value.add(selectedDay);
-                          selectedDaysNotifier.notifyListeners();
-                        }
-                        setState(() {
-                          _focusedDay = focusedDay;
-                        });
-                      },
                       daysOfWeekHeight: 50,
-                      calendarStyle: CalendarStyle(
-                        markersAlignment: Alignment.bottomCenter,
-                        markerDecoration: BoxDecoration(
-                            shape: BoxShape.circle, color: Colors.purple),
-                        markerMargin:
-                            const EdgeInsets.symmetric(horizontal: 1.5),
-                        markerSize: 4,
-                        isTodayHighlighted: true,
-                        todayDecoration: BoxDecoration(
-                            color: Colors.orange, shape: BoxShape.circle),
-                        selectedDecoration: BoxDecoration(
-                            color: Colors.blue, shape: BoxShape.circle),
-                        outsideDaysVisible: true,
-                        weekendTextStyle: TextStyle(color: Colors.red),
-                        holidayTextStyle: TextStyle(color: Colors.green),
-                      ),
                     ),
                   ),
                 ],
@@ -2019,6 +1938,14 @@ VALUES $values;
         );
       }),
     );
+  }
+
+  DateTime normalizeDate(DateTime date) {
+    return DateTime.utc(date.year, date.month, date.day);
+  }
+
+  List<Event> _getEventsForDay(DateTime day) {
+    return events[day] ?? [];
   }
 
   void handlePan(DragUpdateDetails details) {
@@ -2176,7 +2103,7 @@ VALUES $values;
     // Customize holiday cell
     return Container(
       decoration: BoxDecoration(
-        color: Colors.red[300],
+        color: Colors.white,
         shape: BoxShape.circle,
       ),
       child: Center(
@@ -2482,7 +2409,8 @@ VALUES $values;
 
                       if (mode == "offline") {
                         await DatabaseHelper.instance.insertEvent(newEvent);
-                        await _loadDataFromSQLite();
+                        await _loadDataFromSQLite(startDateTime, endDateTime);
+                        ;
                         print("Event saved to SQLite in offline mode.");
                       } else {
                         print("Event added temporarily in online mode.");
@@ -2505,25 +2433,27 @@ VALUES $values;
 class CalendarDayCell extends StatelessWidget {
   final DateTime date;
   final bool isToday;
-  final bool isFocused; // Adding isFocused to handle visual changes for focus
+  final bool isFocused;
   final ValueNotifier<Set<DateTime>> selectedDaysNotifier;
   final bool isGroupSelectionEnabled;
   final Function(DateTime) onDayFocused;
   final Function(DateTime) onDaySelected;
   final Function(DateTime) onDayDoubleTapped;
-  final Function(DateTime) onDayLongPressed; // Handler for long press
+  final Function(DateTime) onDayLongPressed;
+  final bool Function(DateTime) isHoliday; // Predicate to check for holidays
 
   const CalendarDayCell({
     Key? key,
     required this.date,
     required this.isToday,
-    required this.isFocused, // Include isFocused in the constructor
+    required this.isFocused,
     required this.selectedDaysNotifier,
     required this.isGroupSelectionEnabled,
     required this.onDayFocused,
     required this.onDaySelected,
     required this.onDayDoubleTapped,
     required this.onDayLongPressed,
+    required this.isHoliday, // Include this in the constructor
   }) : super(key: key);
 
   @override
@@ -2531,33 +2461,30 @@ class CalendarDayCell extends StatelessWidget {
     return ValueListenableBuilder<Set<DateTime>>(
       valueListenable: selectedDaysNotifier,
       builder: (context, selectedDays, child) {
-        print(
-            'Rebuilding ${date.toString()}, selected: ${selectedDays.contains(date)}');
         bool isSelected = selectedDays.contains(date);
-        print(
-            "Building for $date: selected = $isSelected, set = $selectedDays");
+        bool isHoliday = this.isHoliday(date); // Check if the date is a holiday
+
         return GestureDetector(
-          onTap: () => onDayFocused(
-              date), // Focus the day without modifying selection state
-          onLongPress: () => onDayLongPressed(
-              date), // Enable group selection and add this day to selectedDays
-          onDoubleTap: () => onDayDoubleTapped(
-              date), // Call the event creation/editing dialog on double tap
+          onTap: () => onDayFocused(date),
+          onLongPress: () => onDayLongPressed(date),
+          onDoubleTap: () => onDayDoubleTapped(date),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 300),
             decoration: BoxDecoration(
               color: isSelected
                   ? Colors.blue
-                  : (isFocused ? Colors.blue[300] : Colors.grey[300]),
+                  : isHoliday
+                      ? Colors.red
+                      : (isFocused
+                          ? Colors.blue[300]
+                          : Colors.grey[300]), // Highlight holidays in red
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
                   color: isSelected
                       ? Colors.blue
                       : (isFocused
-                          ? (Colors.blue[700] ??
-                              Colors.blue) // Provide default if null
-                          : (Colors.grey[700] ??
-                              Colors.grey)), // Provide default if null
+                          ? (Colors.blue[700] ?? Colors.blue)
+                          : (Colors.grey[700] ?? Colors.grey)),
                   width: 2),
               boxShadow: isSelected
                   ? [
