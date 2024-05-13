@@ -170,6 +170,9 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
     DateTime.friday
   ];
   Offset? _cursorPosition;
+  Offset _initialFocalPoint = Offset.zero;
+  double _initialScale = 1.0;
+  double _initialDistance = 0.0;
 
   int activePointerCount = 0;
 // Default size initialization
@@ -1977,63 +1980,39 @@ VALUES $values;
             setState(() {
               activePointerCount--;
               print("Pointer count decreased: $activePointerCount");
+              if (activePointerCount < 2) {
+                _isScaling = false;
+              }
             });
           },
-          child: RawGestureDetector(
-            gestures: <Type, GestureRecognizerFactory>{
-              PanGestureRecognizer:
-                  GestureRecognizerFactoryWithHandlers<PanGestureRecognizer>(
-                () => PanGestureRecognizer(),
-                (PanGestureRecognizer instance) {
-                  instance
-                    ..onStart = (DragStartDetails details) {
-                      if (!_isScaling) {
-                        print("Pan start");
-                        setState(() => _focusedDay);
-                      }
-                    }
-                    ..onUpdate = (DragUpdateDetails details) {
-                      if (!_isScaling) {
-                        print("Pan update");
-                        handlePan(details);
-                      }
-                    }
-                    ..onEnd = (DragEndDetails details) {
-                      if (!_isScaling) {
-                        print("Pan end");
-                        setState(() => _focusedDay);
-                      }
-                    };
-                },
-              ),
-              ScaleGestureRecognizer:
-                  GestureRecognizerFactoryWithHandlers<ScaleGestureRecognizer>(
-                () => ScaleGestureRecognizer(),
-                (ScaleGestureRecognizer instance) {
-                  instance
-                    ..onStart = (ScaleStartDetails details) {
-                      setState(() {
-                        if (details.pointerCount == 1) {
-                          _isScaling = true;
-                          print("Scaling started with two fingers");
-                        }
-                      });
-                    }
-                    ..onUpdate = (ScaleUpdateDetails details) {
-                      if (_isScaling) {
-                        handleScaleUpdate(
-                            details); // Your existing scaling logic
-                        print("Scaling... factor: ${details.scale}");
-                      }
-                    }
-                    ..onEnd = (ScaleEndDetails details) {
-                      setState(() {
-                        _isScaling = false;
-                        print("Scaling ended");
-                      });
-                    };
-                },
-              ),
+          child: GestureDetector(
+            onScaleStart: (ScaleStartDetails details) {
+              if (activePointerCount >= 2) {
+                setState(() {
+                  _isScaling = true;
+                  _initialScale = rowHeight / _initialRowHeight;
+                  print("Scaling started with two fingers");
+                });
+              }
+            },
+            onScaleUpdate: (ScaleUpdateDetails details) {
+              if (_isScaling && activePointerCount == 2) {
+                handleScaleUpdate(details);
+                print("Scaling... factor: ${details.scale}");
+              } else if (!_isScaling && activePointerCount == 1) {
+                handlePan(
+                  DragUpdateDetails(
+                    globalPosition: details.focalPoint,
+                    localPosition: details.localFocalPoint,
+                  ),
+                );
+              }
+            },
+            onScaleEnd: (ScaleEndDetails details) {
+              setState(() {
+                _isScaling = false;
+                print("Scaling ended");
+              });
             },
             child: Stack(
               children: [
@@ -2068,10 +2047,8 @@ VALUES $values;
                             const Duration(milliseconds: 250),
                         formatAnimationCurve: Curves.easeInOut,
                         onFormatChanged: _onFormatChanged,
-                        // holidayPredicate: (day) => holidays.containsKey(day),
                         eventLoader: (day) => events[day] ?? [],
                         onPageChanged: (focusedDay) {
-                          // Set the focus to the first day of the current month when the page changes
                           DateTime firstDayOfNewMonth =
                               DateTime(focusedDay.year, focusedDay.month, 1);
                           setState(() {
@@ -2173,6 +2150,32 @@ VALUES $values;
     );
   }
 
+  void handleScaleUpdate(ScaleUpdateDetails details) {
+    RenderBox? box =
+        _calendarKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box != null) {
+      Offset localPosition = box.globalToLocal(details.focalPoint);
+      double headerHeight = calculateDynamicHeaderHeight();
+
+      if (localPosition.dy > headerHeight || details.scale < _initialScale) {
+        localPosition = Offset(min(max(localPosition.dx, 0), box.size.width),
+            min(max(localPosition.dy, headerHeight), box.size.height));
+
+        double newHeight = _initialRowHeight * details.scale;
+        newHeight = newHeight.clamp(40.0, 500.0);
+
+        if (newHeight != rowHeight) {
+          setState(() {
+            rowHeight = newHeight;
+            print("Scaling... new height: $rowHeight");
+          });
+        }
+      } else {
+        print("Scale gesture in header area ignored.");
+      }
+    }
+  }
+
   void handlePan(DragUpdateDetails details) {
     RenderBox? box =
         _calendarKey.currentContext?.findRenderObject() as RenderBox?;
@@ -2213,38 +2216,6 @@ VALUES $values;
       } else {
         // Optionally handle or ignore gestures in the header area
         print("Gesture in header area ignored.");
-      }
-    }
-  }
-
-  void handleScaleUpdate(ScaleUpdateDetails details) {
-    RenderBox? box =
-        _calendarKey.currentContext?.findRenderObject() as RenderBox?;
-    if (box != null) {
-      Offset localPosition = box.globalToLocal(details.focalPoint);
-      double headerHeight = calculateDynamicHeaderHeight();
-
-      // Ensure the gesture is within the calendar bounds, below the header
-      if (localPosition.dy > headerHeight) {
-        localPosition = Offset(min(max(localPosition.dx, 0), box.size.width),
-            min(max(localPosition.dy, headerHeight), box.size.height));
-
-        // Apply the scale only if the gesture occurs within these bounds
-        if (_isScaling) {
-          double newHeight = _initialRowHeight * details.scale;
-
-          // Clamp the new height to prevent extreme scaling
-          newHeight = newHeight.clamp(40.0, 500.0);
-
-          if (newHeight != rowHeight) {
-            setState(() {
-              rowHeight = newHeight;
-              print("Scaling... new height: $rowHeight");
-            });
-          }
-        }
-      } else {
-        print("Scale gesture in header area ignored.");
       }
     }
   }
