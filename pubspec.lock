@@ -142,6 +142,14 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  flutter_analog_clock:
+    dependency: "direct main"
+    description:
+      name: flutter_analog_clock
+      sha256: "5bf40195f93ff366c73c628e83fc5b380b9639121db77d30a68a12b442e89487"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.3"
   flutter_cache_manager:
     dependency: transitive
     description:
@@ -517,6 +525,14 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.99"
+  slide_digital_clock:
+    dependency: "direct main"
+    description:
+      name: slide_digital_clock
+      sha256: c2d3f9d65c0e39a98a5883ccb97912f2f2f28d7f844de86cbe7a8b120815da3c
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.3"
   source_span:
     dependency: transitive
     description:

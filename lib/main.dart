@@ -10,7 +10,7 @@ Future<void> main() async {
   await NgrokManager.fetchNgrokData();
   // Delete the database to start fresh
 
-  // await DatabaseHelper.instance.deleteDB();
+  //await DatabaseHelper.instance.deleteDB();
 
   initializeDateFormatting().then((_) => runApp(MyApp()));
 }

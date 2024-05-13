@@ -7,7 +7,7 @@ class Event {
   final String title;
   final bool isPrivate;
   final bool isAllDay;
-  final DateTime? date;
+  late final DateTime? date;
   final DateTime? endDate; // Added to handle multi-day events
   final String? startTime;
   final String? endTime;
