@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/gestures.dart';
@@ -19,72 +20,11 @@ import 'package:zcalendar/ngrok.dart';
 import 'package:zcalendar/widgets/countries_dialogue.dart';
 import 'package:slide_digital_clock/slide_digital_clock.dart';
 import 'package:zcalendar/widgets/functional_button.dart';
+import 'package:zcalendar/widgets/tragic_widgets.dart';
 import 'events.dart';
+import 'package:path_provider/path_provider.dart';
 
 enum DataSource { online, offline }
-
-class WorkHours {
-  final TimeOfDay start;
-  final TimeOfDay end;
-
-  WorkHours({required this.start, required this.end});
-}
-
-class CustomLoadingWidget extends StatefulWidget {
-  final String message;
-  final Function(bool) onConfirm;
-  final String stepDescription;
-
-  const CustomLoadingWidget({
-    super.key,
-    required this.message,
-    required this.onConfirm,
-    required this.stepDescription,
-  });
-
-  @override
-  CustomLoadingWidgetState createState() => CustomLoadingWidgetState();
-}
-
-class CustomLoadingWidgetState extends State<CustomLoadingWidget> {
-  @override
-  void initState() {
-    super.initState();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    List<Widget> children = [
-      const CircularProgressIndicator(),
-      const SizedBox(height: 16.0),
-      Text(
-        widget.message,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 18.0,
-        ),
-      ),
-      const SizedBox(height: 16.0),
-      Text(
-        widget.stepDescription,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 16.0,
-        ),
-      ),
-    ];
-
-    return Container(
-      color: Colors.black.withOpacity(0.7),
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: children,
-        ),
-      ),
-    );
-  }
-}
 
 class Step {
   final String description;
@@ -141,20 +81,20 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
   GlobalKey<CalendarPageState> calendarPageKey = GlobalKey<CalendarPageState>();
   bool _imagesLoaded = false;
   bool _dataLoaded = false;
-  List<String?> seasonBackgroundImages = [];
+
   DateTime? _selectedDay = DateTime.now();
-  DateTime _focusedDay = DateTime.now();
+
   GlobalKey _calendarKey = GlobalKey();
   double rowHeight = 65.0; // Default row height
   double _initialRowHeight = 65.0;
   static const int columns = 7; // Typically 7 days in a week
   static const int rows = 6; // Maximum number of weeks visible in a month view
   CalendarFormat _calendarFormat = CalendarFormat.month;
-  bool groupByCountry = false; // This will track the toggle state
+
   static const int debounceMillis = 1000; // Debounce time for gestures
   Map<DateTime, List<Event>> events = {};
   Map<DateTime, List<Event>> holidays = {};
-  bool _isScaling = false;
+
   String userAuthorizationLevel = ''; // Move userAuthorizationLevel here
   String? userToken; // Add userToken here
   List<String>? selectedCountries;
@@ -169,12 +109,14 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
     DateTime.thursday,
     DateTime.friday
   ];
-  Offset? _cursorPosition;
+  ValueNotifier<Offset?> _cursorPosition = ValueNotifier<Offset?>(null);
+  ValueNotifier<bool> _isScaling = ValueNotifier<bool>(false);
+  bool groupByCountry = false; // This will track the toggle state
   Offset _initialFocalPoint = Offset.zero;
   double _initialScale = 1.0;
   double _initialDistance = 0.0;
 
-  int activePointerCount = 0;
+  ValueNotifier<int> activePointerCount = ValueNotifier<int>(0);
 // Default size initialization
 // Default position initialization
   double _calendarMaxHeight = 600; // Default maximum height
@@ -203,8 +145,10 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
 // Directly compute startYear and endYear based on the current time
   DateTime startDateTime = DateTime(DateTime.now().year - 30, 1, 1);
   DateTime endDateTime = DateTime(DateTime.now().year + 30, 12, 31, 23, 59, 59);
-
-  Map<String, String> seasonImages = {
+  ValueNotifier<DateTime> _focusedDayNotifier =
+      ValueNotifier<DateTime>(DateTime.now());
+  late ValueNotifier<Set<DateTime>> selectedDaysNotifier;
+  Map<String, String?> seasonImages = {
     'Winter': 'initial_image_url_for_winter',
     'Late Winter': 'initial_image_url_for_late_winter',
     'Early Spring': 'initial_image_url_for_early_spring',
@@ -214,7 +158,18 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
     'Early Autumn': 'initial_image_url_for_early_autumn',
     'Autumn': 'initial_image_url_for_autumn',
   };
-  late ValueNotifier<Set<DateTime>> selectedDaysNotifier;
+  Map<String, String?> seasonBackgroundImages = {
+    'Winter': 'initial_image_url_for_winter',
+    'Late Winter': 'initial_image_url_for_late_winter',
+    'Early Spring': 'initial_image_url_for_early_spring',
+    'Spring': 'initial_image_url_for_spring',
+    'Early Summer': 'initial_image_url_for_early_summer',
+    'Summer': 'initial_image_url_for_summer',
+    'Early Autumn': 'initial_image_url_for_early_autumn',
+    'Autumn': 'initial_image_url_for_autumn',
+  };
+  ValueNotifier<String?> _backgroundImageNotifier =
+      ValueNotifier<String?>(null);
 
   @override
   void initState() {
@@ -227,7 +182,14 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
     _preloadSeasonImages();
 
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback(_afterLayout);
+  }
+
+  @override
+  void dispose() {
+    _focusedDayNotifier.dispose();
+    selectedDaysNotifier.dispose();
+    _backgroundImageNotifier.dispose();
+    super.dispose();
   }
 
   Future<String> getUsername() async {
@@ -326,11 +288,6 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
 
     // Return null or throw an exception if no format matches
     return null;
-  }
-
-  @override
-  void dispose() {
-    super.dispose(); // Call the superclass's dispose method
   }
 
   // Function to extract the table count from the response data
@@ -451,7 +408,7 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
 
 // Determine the season along with the month for more specific context using range comparisons
   String _getSeasonForMonth() {
-    final int month = _focusedDay.month;
+    final int month = _focusedDayNotifier.value.month;
     if (month == 1 || month == 12) {
       return 'Winter';
     } else if (month == 2) {
@@ -934,211 +891,6 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
     print("Dummy events added for today.");
   }
 
-  List<Widget> _buildEventListForMonth(DateTime month) {
-    final List<Widget> eventWidgets = [];
-    final Map<String, List<Event>> eventGroups = {};
-    final List<Event> officialHolidays = [];
-    final Set<String> uniqueFlags = {};
-
-    // Extracting events and holidays for the specific month
-    Map<DateTime, List<Event>> combinedEvents = {...events, ...holidays};
-
-    combinedEvents.forEach((date, eventList) {
-      if (date.month == month.month && date.year == month.year) {
-        for (var event in eventList) {
-          if (event.username == "HolidayApi" && event.isPrivate) {
-            officialHolidays.add(event); // Collect official holidays
-            if (event.flagUrl != null && event.flagUrl!.isNotEmpty) {
-              uniqueFlags.add(event.flagUrl!); // Collect flags for theme
-            }
-          } else {
-            String groupKey =
-                event.isAllDay ? "All Day Events" : "Timed Events";
-            eventGroups.putIfAbsent(groupKey, () => []).add(event);
-          }
-        }
-      }
-    });
-
-    // Build a visual theme based on flags
-    if (uniqueFlags.isNotEmpty) {
-      eventWidgets.add(buildFlagHeader(uniqueFlags));
-    }
-
-    // Adding official holidays at the top
-    if (officialHolidays.isNotEmpty) {
-      eventWidgets.add(buildOfficialHolidayList(officialHolidays));
-    }
-
-    // Sorting timed events by start time
-    if (eventGroups.containsKey("Timed Events")) {
-      eventGroups["Timed Events"]
-          ?.sort((a, b) => a.startTime?.compareTo(b.startTime ?? '') ?? 0);
-    }
-
-    // Building event widgets
-    eventGroups.forEach((key, events) {
-      eventWidgets.add(buildEventSection(key, events));
-    });
-
-    if (eventWidgets.isEmpty) {
-      eventWidgets.add(Center(child: Text('No events for this month.')));
-    }
-
-    return eventWidgets;
-  }
-
-  Widget buildFlagHeader(Set<String> flags) {
-    List<Widget> flagWidgets = flags.map((url) {
-      return url.isNotEmpty
-          ? Image.network(url, width: 30, height: 20)
-          : Icon(Icons.sentiment_satisfied,
-              size: 30); // Default icon for empty URL
-    }).toList();
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Wrap(children: flagWidgets),
-    );
-  }
-
-  Widget buildOfficialHolidayList(List<Event> holidays) {
-    List<Widget> holidayWidgets = holidays
-        .map((holiday) => ListTile(
-              title: Text(holiday.title),
-              subtitle: Text(DateFormat('y MMMM d').format(holiday.date!)),
-              trailing: Icon(Icons.flag, color: Colors.red),
-            ))
-        .toList();
-
-    return Column(children: holidayWidgets);
-  }
-
-  Widget buildEventSection(String sectionTitle, List<Event> events) {
-    List<Widget> eventTiles = events
-        .map((event) => ListTile(
-              leading: Icon(
-                  event.isPrivate ? Icons.lock : Icons.event_available,
-                  color: event.isPrivate ? Colors.red : Colors.green),
-              title: Text(event.title),
-              subtitle: Text(
-                  "${event.date != null ? DateFormat('y MMMM d').format(event.date!) : 'Date not set'} | ${event.isAllDay ? 'All day' : '${event.startTime} - ${event.endTime}'}"),
-            ))
-        .toList();
-
-    return Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Text(sectionTitle,
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-          ),
-          ...eventTiles
-        ],
-      ),
-    );
-  }
-
-  List<Widget> _buildEventListForMonthGrouped(DateTime month) {
-    final Map<String, List<Event>> eventGroups = {};
-    final Map<String, Set<String>> eventFlags = {};
-    final Map<String, String> flagsKeyMap = {};
-    final List<Widget> eventWidgets = [];
-
-    // Combine events and holidays into a single list for processing
-    Map<DateTime, List<Event>> combinedEvents = {...events, ...holidays};
-
-    // Default flag URL for events with no flag
-    final String defaultFlagUrl =
-        "https://m.media-amazon.com/images/I/51TrNDG7V1L._AC_UF894,1000_QL80_.jpg";
-
-    // Collect flags for each event based on title and date
-    combinedEvents.forEach((date, eventList) {
-      if (date.month == month.month && date.year == month.year) {
-        for (var event in eventList) {
-          String baseKey = '${event.title}_${event.date}';
-          eventFlags.putIfAbsent(baseKey, () => Set<String>())
-            ..add(event.flagUrl ??
-                (event.isAllDay && event.isPrivate ? defaultFlagUrl : ''));
-        }
-      }
-    });
-
-    // Create a unique key for each set of flags
-    eventFlags.forEach((key, flags) {
-      List<String> sortedFlags = flags.toList()..sort();
-      String flagsKey = sortedFlags.join('_');
-      flagsKeyMap[key] = flagsKey;
-    });
-
-    // Group events by a unique combination of title, date, and flags
-    combinedEvents.forEach((date, eventList) {
-      if (date.month == month.month && date.year == month.year) {
-        for (var event in eventList) {
-          String baseKey = '${event.title}_${event.date}';
-          String flagsKey = flagsKeyMap[baseKey]!;
-          String groupKey = '${baseKey}_$flagsKey';
-          eventGroups.putIfAbsent(groupKey, () => [])
-            ..add(event); // Use flagsKey to group by flags
-        }
-      }
-    });
-
-    // Aggregate similar groups based on flags and create widgets
-    eventGroups.forEach((flagsKey, events) {
-      List<Widget> flags =
-          eventFlags[events.first.title + '_' + '${events.first.date}']!
-              .map((url) => Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 2),
-                  child: url.isNotEmpty
-                      ? Image.network(url, width: 30, height: 20)
-                      : Icon(Icons.flag, size: 30)))
-              .toList();
-
-      Event representativeEvent = events.first;
-      List<Widget> eventListTile = [
-        ListTile(
-          leading: Icon(Icons.circle,
-              color: representativeEvent.isPrivate
-                  ? Colors.red[300]
-                  : Colors.green[300],
-              size: 12),
-          title: Text(representativeEvent.title,
-              style: TextStyle(fontWeight: FontWeight.bold)),
-          subtitle: Text(
-              "${representativeEvent.date != null ? DateFormat('MMMM d, yyyy').format(representativeEvent.date!) : 'Date not set'} | ${representativeEvent.isAllDay ? 'All day' : '${representativeEvent.startTime} - ${representativeEvent.endTime}'}"),
-          trailing: Icon(Icons.arrow_forward_ios, size: 16),
-          onTap: () {},
-        )
-      ];
-
-      // Construct the card for each group
-      eventWidgets.add(Card(
-        elevation: 4,
-        margin: EdgeInsets.all(8),
-        child: Column(
-          children: [
-            if (flags.isNotEmpty)
-              Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: flags)),
-            ...eventListTile
-          ],
-        ),
-      ));
-    });
-
-    // Handle case when no events are available
-    if (eventWidgets.isEmpty) {
-      eventWidgets.add(Center(
-          child: Text('No events for this month.',
-              style: TextStyle(fontStyle: FontStyle.italic, fontSize: 16))));
-    }
-
-    return eventWidgets;
-  }
-
   List<Event> getEventsForDay(DateTime date) {
     // Normalize the date to midnight to ensure consistency with stored keys
     DateTime normalizedDate = DateTime(date.year, date.month, date.day);
@@ -1564,34 +1316,47 @@ VALUES $values;
     }
   }
 
-  // Preload images for all seasons and cache them
-  _preloadSeasonImages() async {
-    for (final season in seasonImages.keys) {
-      final imageUrl = await fetchImageForSeason(season);
-      if (imageUrl != null) {
-        final image = CachedNetworkImageProvider(imageUrl);
-        await precacheImage(image, context); // Cache the image in memory
-        setState(() {
-          seasonImages[season] = imageUrl;
-          seasonBackgroundImages.add(imageUrl);
-        });
+  Future<File> _getLocalFile(String filename) async {
+    final directory = await getApplicationDocumentsDirectory();
+    return File('${directory.path}/$filename');
+  }
+
+  Future<void> _preloadSeasonImages() async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final season in seasonBackgroundImages.keys) {
+      final localImagePath = seasonBackgroundImages[season];
+      if (localImagePath == null || !await File(localImagePath).exists()) {
+        final imageUrl = await fetchImageForSeason(season);
+        if (imageUrl != null) {
+          final response = await http.get(Uri.parse(imageUrl));
+          if (response.statusCode == 200) {
+            final file = await _getLocalFile('$season.png');
+            await file.writeAsBytes(response.bodyBytes);
+            final imagePath = file.path;
+            setState(() {
+              seasonBackgroundImages[season] =
+                  imagePath; // Store the image path for future use
+              // Add to the list of background images
+            });
+            await prefs.setString(
+                season, imagePath); // Store image path persistently
+          }
+        }
+      } else {
+        // Add the image path to the notifier's value
+        _backgroundImageNotifier.value = localImagePath;
       }
     }
     setState(() {
       _imagesLoaded = true;
+      _updateBackgroundImage();
     });
   }
 
-  void _onFormatChanged(CalendarFormat format) {
-    if (_calendarFormat != format) {
-      setState(() {
-        _calendarFormat = format;
-      });
-      // Force a layout update to recalculate the height based on the new format
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _afterLayout(_);
-      });
-    }
+  void _updateBackgroundImage() {
+    final String currentSeason = _getSeasonForMonth();
+    final backgroundImage = seasonBackgroundImages[currentSeason];
+    _backgroundImageNotifier.value = backgroundImage;
   }
 
   double calculateDynamicHeaderHeight() {
@@ -1609,8 +1374,10 @@ VALUES $values;
         _calendarKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null) {
       print("Error: RenderBox is not available.");
-      return DateTime(_focusedDay.year, _focusedDay.month,
-          _focusedDay.day); // Fallback if box is not found
+      return DateTime(
+          _focusedDayNotifier.value.year,
+          _focusedDayNotifier.value.month,
+          _focusedDayNotifier.value.day); // Fallback if box is not found
     }
 
     double leftMargin = calculateDynamicLeftMargin();
@@ -1628,11 +1395,14 @@ VALUES $values;
     // Ensure that adjusted position does not result in negative row values
     if (row < 0) {
       print("Gesture in header area, no date calculated.");
-      return DateTime(_focusedDay.year, _focusedDay.month,
-          _focusedDay.day); // Ignore gestures in the header
+      return DateTime(
+          _focusedDayNotifier.value.year,
+          _focusedDayNotifier.value.month,
+          _focusedDayNotifier.value.day); // Ignore gestures in the header
     }
 
-    DateTime firstDayOfMonth = DateTime(_focusedDay.year, _focusedDay.month, 1);
+    DateTime firstDayOfMonth = DateTime(
+        _focusedDayNotifier.value.year, _focusedDayNotifier.value.month, 1);
     int daysToSubtract = (firstDayOfMonth.weekday - 1) % 7;
     DateTime firstVisibleDay =
         firstDayOfMonth.subtract(Duration(days: daysToSubtract));
@@ -1645,8 +1415,8 @@ VALUES $values;
         DateTime(calculatedDate.year, calculatedDate.month, calculatedDate.day);
 
     // Check if the calculated date is within the current focused month
-    if (calculatedDate.month == _focusedDay.month &&
-        calculatedDate.year == _focusedDay.year) {
+    if (calculatedDate.month == _focusedDayNotifier.value.month &&
+        calculatedDate.year == _focusedDayNotifier.value.year) {
       if (!printedDates.contains(calculatedDate)) {
         print("Calculated Date: $calculatedDate");
         printedDates.add(calculatedDate);
@@ -1655,23 +1425,8 @@ VALUES $values;
     } else {
       // Return focusedDay if the calculated date is outside the focused month
       print("Calculated Date outside focused month: $calculatedDate");
-      return DateTime(_focusedDay.year, _focusedDay.month, _focusedDay.day);
-    }
-  }
-
-  void _afterLayout(_) {
-    final RenderBox? renderBox =
-        _calendarKey.currentContext?.findRenderObject() as RenderBox?;
-    if (renderBox != null) {
-      double newHeight = renderBox.size.height;
-      // Only update if the height change is significant to prevent unnecessary updates
-      if ((newHeight - _calendarMaxHeight).abs() > 1) {
-        print(
-            "Updating calendar max height from $_calendarMaxHeight to $newHeight");
-        setState(() {
-          _calendarMaxHeight = newHeight;
-        });
-      }
+      return DateTime(_focusedDayNotifier.value.year,
+          _focusedDayNotifier.value.month, _focusedDayNotifier.value.day);
     }
   }
 
@@ -1721,7 +1476,7 @@ VALUES $values;
       Offset localPosition = box.globalToLocal(details.globalPosition);
       DateTime tappedDate = _calculateDateFromGesture(localPosition);
       setState(() {
-        _focusedDay = tappedDate;
+        _focusedDayNotifier.value = tappedDate;
         if (_isGroupSelectionEnabled) {
           toggleSelectedDay(tappedDate);
         }
@@ -1767,6 +1522,35 @@ VALUES $values;
     );
   }
 
+  Widget _buildSliverPersistentHeader2() {
+    return SliverPersistentHeader(
+      pinned: false,
+      floating: true,
+      delegate: _MySliverAppBarDelegate(
+        minHeight: 65.0,
+        maxHeight: 65.0,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 0.0),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.5), // Semi-transparent background
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: Text(
+              'Events for ${DateFormat('MMMM yyyy').format(_focusedDayNotifier.value)}',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+                color:
+                    Colors.white, // Text color to contrast with the background
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildHeaderContent() {
     List<Widget> buttons = [
       FunctionalButton(
@@ -1801,166 +1585,377 @@ VALUES $values;
     );
   }
 
+  Widget buildFlagHeader(Set<String> flags) {
+    List<Widget> flagWidgets = flags.map((url) {
+      return url.isNotEmpty
+          ? Image.network(url, width: 30, height: 20)
+          : Icon(Icons.sentiment_satisfied,
+              size: 30); // Default icon for empty URL
+    }).toList();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Wrap(children: flagWidgets),
+    );
+  }
+
+  Widget buildOfficialHolidayList(List<Event> holidays) {
+    List<Widget> holidayWidgets = holidays
+        .map((holiday) => ListTile(
+              title: Text(holiday.title),
+              subtitle: Text(DateFormat('y MMMM d').format(holiday.date!)),
+              trailing: Icon(Icons.flag, color: Colors.red),
+            ))
+        .toList();
+
+    return Column(children: holidayWidgets);
+  }
+
+  Widget buildEventSection(String sectionTitle, List<Event> events) {
+    List<Widget> eventTiles = events
+        .map((event) => ListTile(
+              leading: Icon(
+                  event.isPrivate ? Icons.lock : Icons.event_available,
+                  color: event.isPrivate ? Colors.red : Colors.green),
+              title: Text(event.title),
+              subtitle: Text(
+                  "${event.date != null ? DateFormat('y MMMM d').format(event.date!) : 'Date not set'} | ${event.isAllDay ? 'All day' : '${event.startTime} - ${event.endTime}'}"),
+            ))
+        .toList();
+
+    return Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Text(sectionTitle,
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+          ),
+          ...eventTiles
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildEventListForMonth(DateTime month) {
+    final List<Widget> eventWidgets = [];
+    final Map<String, List<Event>> eventGroups = {};
+    final List<Event> officialHolidays = [];
+    final Set<String> uniqueFlags = {};
+
+    // Extracting events and holidays for the specific month
+    Map<DateTime, List<Event>> combinedEvents = {...events, ...holidays};
+
+    combinedEvents.forEach((date, eventList) {
+      if (date.month == month.month && date.year == month.year) {
+        for (var event in eventList) {
+          if (event.username == "HolidayApi" && event.isPrivate) {
+            officialHolidays.add(event); // Collect official holidays
+            if (event.flagUrl != null && event.flagUrl!.isNotEmpty) {
+              uniqueFlags.add(event.flagUrl!); // Collect flags for theme
+            }
+          } else {
+            String groupKey =
+                event.isAllDay ? "All Day Events" : "Timed Events";
+            eventGroups.putIfAbsent(groupKey, () => []).add(event);
+          }
+        }
+      }
+    });
+
+    // Build a visual theme based on flags
+    if (uniqueFlags.isNotEmpty) {
+      eventWidgets.add(buildFlagHeader(uniqueFlags));
+    }
+
+    // Adding official holidays at the top
+    if (officialHolidays.isNotEmpty) {
+      eventWidgets.add(buildOfficialHolidayList(officialHolidays));
+    }
+
+    // Sorting timed events by start time
+    if (eventGroups.containsKey("Timed Events")) {
+      eventGroups["Timed Events"]
+          ?.sort((a, b) => a.startTime?.compareTo(b.startTime ?? '') ?? 0);
+    }
+
+    // Building event widgets
+    eventGroups.forEach((key, events) {
+      eventWidgets.add(buildEventSection(key, events));
+    });
+
+    if (eventWidgets.isEmpty) {
+      eventWidgets.add(Center(child: Text('No events for this month.')));
+    }
+
+    return eventWidgets;
+  }
+
+  List<Widget> _buildEventListForMonthGrouped(DateTime month) {
+    final Map<String, List<Event>> eventGroups = {};
+    final Map<String, Set<String>> eventFlags = {};
+    final Map<String, String> flagsKeyMap = {};
+    final List<Widget> eventWidgets = [];
+
+    // Combine events and holidays into a single list for processing
+    Map<DateTime, List<Event>> combinedEvents = {...events, ...holidays};
+
+    // Default flag URL for events with no flag
+    final String defaultFlagUrl =
+        "https://m.media-amazon.com/images/I/51TrNDG7V1L._AC_UF894,1000_QL80_.jpg";
+
+    // Collect flags for each event based on title and date
+    combinedEvents.forEach((date, eventList) {
+      if (date.month == month.month && date.year == month.year) {
+        for (var event in eventList) {
+          String baseKey = '${event.title}_${event.date}';
+          eventFlags.putIfAbsent(baseKey, () => Set<String>())
+            ..add(event.flagUrl ??
+                (event.isAllDay && event.isPrivate ? defaultFlagUrl : ''));
+        }
+      }
+    });
+
+    // Create a unique key for each set of flags
+    eventFlags.forEach((key, flags) {
+      List<String> sortedFlags = flags.toList()..sort();
+      String flagsKey = sortedFlags.join('_');
+      flagsKeyMap[key] = flagsKey;
+    });
+
+    // Group events by a unique combination of title, date, and flags
+    combinedEvents.forEach((date, eventList) {
+      if (date.month == month.month && date.year == month.year) {
+        for (var event in eventList) {
+          String baseKey = '${event.title}_${event.date}';
+          String flagsKey = flagsKeyMap[baseKey]!;
+          String groupKey = '${baseKey}_$flagsKey';
+          eventGroups.putIfAbsent(groupKey, () => [])
+            ..add(event); // Use flagsKey to group by flags
+        }
+      }
+    });
+
+    // Aggregate similar groups based on flags and create widgets
+    eventGroups.forEach((flagsKey, events) {
+      List<Widget> flags =
+          eventFlags[events.first.title + '_' + '${events.first.date}']!
+              .map((url) => Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 2),
+                  child: url.isNotEmpty
+                      ? Image.network(url, width: 30, height: 20)
+                      : Icon(Icons.flag, size: 30)))
+              .toList();
+
+      Event representativeEvent = events.first;
+      List<Widget> eventListTile = [
+        ListTile(
+          leading: Icon(Icons.circle,
+              color: representativeEvent.isPrivate
+                  ? Colors.red[300]
+                  : Colors.green[300],
+              size: 12),
+          title: Text(representativeEvent.title,
+              style: TextStyle(fontWeight: FontWeight.bold)),
+          subtitle: Text(
+              "${representativeEvent.date != null ? DateFormat('MMMM d, yyyy').format(representativeEvent.date!) : 'Date not set'} | ${representativeEvent.isAllDay ? 'All day' : '${representativeEvent.startTime} - ${representativeEvent.endTime}'}"),
+          trailing: Icon(Icons.arrow_forward_ios, size: 16),
+          onTap: () {},
+        )
+      ];
+
+      // Construct the card for each group
+      eventWidgets.add(Card(
+        elevation: 4,
+        margin: EdgeInsets.all(8),
+        child: Column(
+          children: [
+            if (flags.isNotEmpty)
+              Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: flags)),
+            ...eventListTile
+          ],
+        ),
+      ));
+    });
+
+    // Handle case when no events are available
+    if (eventWidgets.isEmpty) {
+      eventWidgets.add(Center(
+          child: Text('No events for this month.',
+              style: TextStyle(fontStyle: FontStyle.italic, fontSize: 16))));
+    }
+
+    return eventWidgets;
+  }
+
   @override
   Widget build(BuildContext context) {
+    print('Building whole page');
     if (!_imagesLoaded || !_dataLoaded) {
       return Scaffold(
         body: Center(child: CircularProgressIndicator()),
       );
     }
 
-    final int currentSeasonIndex =
-        seasonImages.keys.toList().indexOf(_getSeasonForMonth());
-    final backgroundImage = seasonBackgroundImages[currentSeasonIndex];
-
-    List<Widget> eventWidgets = groupByCountry
-        ? _buildEventListForMonth(_focusedDay)
-        : _buildEventListForMonthGrouped(_focusedDay);
-
     return Scaffold(
       body: Stack(
         children: [
-          Positioned.fill(
-            child: Image.network(
-              '$backgroundImage',
-              fit: BoxFit.cover,
-            ),
+          ValueListenableBuilder<String?>(
+            valueListenable: _backgroundImageNotifier,
+            builder: (context, backgroundImage, child) {
+              return Positioned.fill(
+                child: backgroundImage != null
+                    ? Image.file(
+                        File(backgroundImage),
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) =>
+                            Icon(Icons.error),
+                      )
+                    : Container(
+                        color: Colors.black), // Fallback for missing image
+              );
+            },
           ),
-          CustomScrollView(
-            physics: activePointerCount >= 2
-                ? NeverScrollableScrollPhysics()
-                : BouncingScrollPhysics(),
-            slivers: [
-              SliverAppBar(
-                expandedHeight: 250.0,
-                floating: false,
-                pinned: false,
+          ValueListenableBuilder<DateTime>(
+            valueListenable: _focusedDayNotifier,
+            builder: (context, focusedDay, child) {
+              List<Widget> eventWidgets = !groupByCountry
+                  ? _buildEventListForMonth(focusedDay)
+                  : _buildEventListForMonthGrouped(focusedDay);
 
-                backgroundColor: Colors
-                    .transparent, // Ensure the app bar itself is transparent
-                flexibleSpace: LayoutBuilder(builder:
-                    (BuildContext context, BoxConstraints constraints) {
-                  var top = constraints.biggest.height;
-                  double opacity = ((top - 100) / 170).clamp(0.0, 1.0);
-                  return Stack(fit: StackFit.expand, children: [
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.transparent,
-                            Colors.black.withOpacity(0.3)
-                          ],
-                          stops: [0.5, 1.0],
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 0,
-                      left: 0,
-                      right: 0,
-                      child: Opacity(
-                        opacity: opacity,
-                        child: Container(
-                          padding: const EdgeInsets.all(16.0),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.bottomCenter,
-                              end: Alignment.topCenter,
-                              colors: [
-                                Colors.white.withOpacity(0.7),
-                                Colors.white.withOpacity(0.0)
-                              ],
+              return CustomScrollView(
+                physics: activePointerCount.value >= 2
+                    ? NeverScrollableScrollPhysics()
+                    : BouncingScrollPhysics(),
+                slivers: [
+                  SliverAppBar(
+                    toolbarHeight: 10.0,
+                    collapsedHeight: 20.0,
+                    expandedHeight: 500.0,
+                    floating: false,
+                    pinned: true,
+                    backgroundColor: Colors.transparent,
+                    flexibleSpace: LayoutBuilder(
+                      builder:
+                          (BuildContext context, BoxConstraints constraints) {
+                        var top = constraints.biggest.height;
+                        double opacity = ((top - 100) / 170).clamp(0.0, 1.0);
+                        return Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            DecoratedBox(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [
+                                    Colors.transparent,
+                                    Colors.black.withOpacity(0.3)
+                                  ],
+                                  stops: [0.5, 1.0],
+                                ),
+                              ),
                             ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Center(
-                                child: SizedBox(
-                                  height: 200,
-                                  child: DigitalClock(
-                                    hourMinuteDigitTextStyle:
-                                        const TextStyle(fontSize: 100),
-                                    colon: const Icon(Icons.ac_unit_sharp,
-                                        size: 35),
-                                    colonDecoration: BoxDecoration(
-                                        border: Border.all(),
-                                        shape: BoxShape.circle),
+                            Positioned(
+                              bottom: 0,
+                              left: 0,
+                              right: 0,
+                              child: Opacity(
+                                opacity: opacity,
+                                child: SafeArea(
+                                  child: Container(
+                                    padding: const EdgeInsets.all(16.0),
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.bottomCenter,
+                                        end: Alignment.topCenter,
+                                        colors: [
+                                          Colors.white.withOpacity(0.7),
+                                          Colors.white.withOpacity(0.0)
+                                        ],
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Center(
+                                          child: StaticDigitalClock(),
+                                        ),
+                                        Text("Today's Timeline",
+                                            style: TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 18,
+                                                color: Colors.white)),
+                                        const SizedBox(height: 10.0),
+                                        ..._buildTimelineForDay(focusedDay),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
-                              Text("Today's Timeline",
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 18,
-                                      color: Colors.white)),
-                              const SizedBox(height: 10.0),
-                              ..._buildTimelineForDay(
-                                  _focusedDay), // Calls the method to build the timeline for the focused day
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ]);
-                }),
-              ),
-              _buildSliverPersistentHeader(),
-              SliverToBoxAdapter(
-                child: LayoutBuilder(builder: (context, constraints) {
-                  return Container(
-                    color: Colors.white.withOpacity(0.85),
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                          maxHeight: constraints.maxHeight > 0
-                              ? constraints.maxHeight
-                              : 500),
-                      child: buildCalendar(),
-                    ),
-                  );
-                }),
-              ),
-              SliverFillRemaining(
-                child: Container(
-                  child: SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                  'Events for ${DateFormat('MMMM yyyy').format(_focusedDay)}',
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 18)),
-                              const SizedBox(height: 10.0),
-                              ...eventWidgets
-                            ],
-                          ),
-                        ),
-                      ],
+                            ),
+                          ],
+                        );
+                      },
                     ),
                   ),
-                ),
-              )
-            ],
+                  _buildSliverPersistentHeader(),
+                  SliverToBoxAdapter(
+                    child: LayoutBuilder(builder: (context, constraints) {
+                      return Container(
+                        color: Colors.white.withOpacity(0.85),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: constraints.maxHeight > 0
+                                ? constraints.maxHeight
+                                : 500,
+                          ),
+                          child: buildCalendar(),
+                        ),
+                      );
+                    }),
+                  ),
+                  _buildSliverPersistentHeader2(),
+                  SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (BuildContext context, int index) {
+                        return Stack(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.all(16.0),
+                              child: eventWidgets[index],
+                            ),
+                            Positioned(
+                              top: 8,
+                              right: 8,
+                              child: FloatingActionButton(
+                                mini: true,
+                                onPressed: () {
+                                  setState(() {
+                                    groupByCountry = !groupByCountry;
+                                    print(
+                                        "Toggle state updated: ${groupByCountry}");
+                                  });
+                                },
+                                child: Icon(
+                                    groupByCountry ? Icons.flag : Icons.title),
+                                tooltip: 'Toggle Grouping',
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                      childCount: eventWidgets.length,
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          setState(() {
-            groupByCountry = !groupByCountry;
-            print("Toggle state updated: $groupByCountry");
-          });
-        },
-        child: Icon(groupByCountry ? Icons.flag : Icons.title),
-        tooltip: 'Toggle Grouping',
       ),
     );
   }
@@ -1971,35 +1966,31 @@ VALUES $values;
       child: LayoutBuilder(builder: (context, constraints) {
         return Listener(
           onPointerDown: (PointerDownEvent event) {
-            setState(() {
-              activePointerCount++;
-              print("Pointer count increased: $activePointerCount");
-            });
+            activePointerCount.value++;
+            print("Pointer count increased: $activePointerCount");
           },
           onPointerUp: (PointerUpEvent event) {
-            setState(() {
-              activePointerCount--;
-              print("Pointer count decreased: $activePointerCount");
-              if (activePointerCount < 2) {
-                _isScaling = false;
-              }
-            });
+            activePointerCount.value--;
+            print("Pointer count decreased: $activePointerCount");
+            if (activePointerCount.value < 2) {
+              _isScaling.value = false;
+            }
           },
           child: GestureDetector(
             onScaleStart: (ScaleStartDetails details) {
-              if (activePointerCount >= 2) {
+              if (details.pointerCount >= 2) {
                 setState(() {
-                  _isScaling = true;
+                  _isScaling.value = true;
                   _initialScale = rowHeight / _initialRowHeight;
                   print("Scaling started with two fingers");
                 });
               }
             },
             onScaleUpdate: (ScaleUpdateDetails details) {
-              if (_isScaling && activePointerCount == 2) {
+              if (_isScaling.value && activePointerCount.value == 2) {
                 handleScaleUpdate(details);
                 print("Scaling... factor: ${details.scale}");
-              } else if (!_isScaling && activePointerCount == 1) {
+              } else if (!_isScaling.value && activePointerCount.value == 1) {
                 handlePan(
                   DragUpdateDetails(
                     globalPosition: details.focalPoint,
@@ -2010,7 +2001,7 @@ VALUES $values;
             },
             onScaleEnd: (ScaleEndDetails details) {
               setState(() {
-                _isScaling = false;
+                _isScaling.value = false;
                 print("Scaling ended");
               });
             },
@@ -2029,7 +2020,7 @@ VALUES $values;
                         rowHeight: rowHeight,
                         firstDay: startDateTime,
                         lastDay: endDateTime,
-                        focusedDay: _focusedDay,
+                        focusedDay: _focusedDayNotifier.value,
                         headerVisible: true,
                         daysOfWeekStyle: DaysOfWeekStyle(
                             decoration:
@@ -2046,14 +2037,12 @@ VALUES $values;
                         formatAnimationDuration:
                             const Duration(milliseconds: 250),
                         formatAnimationCurve: Curves.easeInOut,
-                        onFormatChanged: _onFormatChanged,
                         eventLoader: (day) => events[day] ?? [],
                         onPageChanged: (focusedDay) {
                           DateTime firstDayOfNewMonth =
                               DateTime(focusedDay.year, focusedDay.month, 1);
-                          setState(() {
-                            _focusedDay = firstDayOfNewMonth;
-                          });
+                          _focusedDayNotifier.value = firstDayOfNewMonth;
+                          _updateBackgroundImage();
                         },
                         calendarBuilders: CalendarBuilders(
                           defaultBuilder: (context, date, _) => CalendarDayCell(
@@ -2061,7 +2050,8 @@ VALUES $values;
                             isToday: isSameDay(date, DateTime.now()),
                             selectedDaysNotifier: selectedDaysNotifier,
                             isGroupSelectionEnabled: _isGroupSelectionEnabled,
-                            isFocused: isSameDay(date, _focusedDay),
+                            isFocused:
+                                isSameDay(date, _focusedDayNotifier.value),
                             isHoliday: (DateTime date) {
                               DateTime normalizedDate =
                                   DateTime(date.year, date.month, date.day);
@@ -2069,10 +2059,9 @@ VALUES $values;
                             },
                             DayEvents: getEventsForDay(date),
                             onDayFocused: (DateTime focusedDate) {
+                              _focusedDayNotifier.value =
+                                  focusedDate; // Always update the focused day
                               setState(() {
-                                _focusedDay =
-                                    focusedDate; // Always update the focused day
-
                                 // Toggle the selected state if group selection is enabled
                                 if (_isGroupSelectionEnabled) {
                                   toggleSelectedDay(focusedDate);
@@ -2116,31 +2105,26 @@ VALUES $values;
                           holidayBuilder: null,
                           outsideBuilder: (context, date, _) =>
                               _buildOutsideCell(context, date),
-                          rangeStartBuilder: (context, date, _) =>
-                              _buildRangeStartCell(context, date),
-                          rangeEndBuilder: (context, date, _) =>
-                              _buildRangeEndCell(context, date),
-                          withinRangeBuilder: (context, date, _) =>
-                              _buildWithinRangeCell(context, date),
-                          disabledBuilder: (context, date, _) =>
-                              _buildDisabledCell(context, date),
-                          markerBuilder: markerBuilder,
+                          rangeStartBuilder: null,
+                          rangeEndBuilder: null,
+                          withinRangeBuilder: null,
+                          disabledBuilder: null,
+                          markerBuilder: null,
                         ),
                         daysOfWeekHeight: 50,
                       ),
                     ),
                   ],
                 ),
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: CustomPaint(
-                      painter: CursorPainter(
-                        cursorPosition: _cursorPosition,
-                        radius: 20.0,
-                        color: Colors.red,
-                      ),
-                    ),
-                  ),
+                ValueListenableBuilder<Offset?>(
+                  valueListenable: _cursorPosition,
+                  builder: (context, cursorPosition, child) {
+                    return CursorPainterWidget(
+                      cursorPosition: cursorPosition ?? Offset.zero,
+                      radius: 20.0,
+                      color: Colors.red,
+                    );
+                  },
                 ),
               ],
             ),
@@ -2186,10 +2170,16 @@ VALUES $values;
       // Ensure that the gesture is within the calendar bounds, below the header
       if (localPosition.dy > headerHeight) {
         // Clamp the position within the calendar area to prevent overflow
-        localPosition = Offset(min(max(localPosition.dx, 0), box.size.width),
-            min(max(localPosition.dy, headerHeight), box.size.height));
+        localPosition = Offset(
+          min(max(localPosition.dx, 0), box.size.width),
+          min(max(localPosition.dy, headerHeight), box.size.height),
+        );
 
         DateTime dragDate = _calculateDateFromGesture(localPosition);
+
+        // Update the cursor position for visual feedback
+
+        _cursorPosition.value = localPosition;
 
         // Throttle updates: only update if the position corresponds to a new day
         if (_lastToggledDay == null ||
@@ -2205,13 +2195,7 @@ VALUES $values;
                   dragDate; // Update selected day without group selection
             });
           }
-
-          // Update focused day and cursor position to reflect the drag
-          setState(() {
-            _focusedDay = dragDate;
-            _cursorPosition =
-                localPosition; // Update cursor position for visual feedback
-          });
+          _focusedDayNotifier.value = dragDate; // Always update the focused day
         }
       } else {
         // Optionally handle or ignore gestures in the header area
@@ -2256,7 +2240,7 @@ VALUES $values;
       isToday: true,
       selectedDaysNotifier: selectedDaysNotifier,
       isGroupSelectionEnabled: _isGroupSelectionEnabled,
-      isFocused: isSameDay(date, _focusedDay),
+      isFocused: isSameDay(date, _focusedDayNotifier.value),
       isHoliday: (DateTime date) {
         DateTime normalizedDate = DateTime(date.year, date.month, date.day);
         return holidays.containsKey(normalizedDate);
@@ -2264,8 +2248,8 @@ VALUES $values;
       DayEvents:
           events.cast<Event>(), // Cast dynamic to Event if your list is dynamic
       onDayFocused: (DateTime focusedDate) {
+        _focusedDayNotifier.value = focusedDate;
         setState(() {
-          _focusedDay = focusedDate;
           if (_isGroupSelectionEnabled) {
             toggleSelectedDay(focusedDate);
           }
@@ -2295,50 +2279,6 @@ VALUES $values;
     );
   }
 
-  Widget _buildSelectedDayCell(BuildContext context, DateTime date) {
-    // Use ValueListenableBuilder for selected states and manually check for focused states
-    return ValueListenableBuilder<Set<DateTime>>(
-      valueListenable: selectedDaysNotifier,
-      builder: (context, selectedDays, _) {
-        bool isSelected = selectedDays.contains(date);
-        bool isFocused =
-            _focusedDay.isAtSameMomentAs(date); // Check if the date is focused
-
-        return GestureDetector(
-          onTap: () => toggleSelectedDay(date),
-          child: Container(
-            decoration: BoxDecoration(
-              color: isSelected ? Colors.blue : Colors.white,
-              border: Border.all(
-                  color: isFocused
-                      ? Colors.red
-                      : (isSelected ? Colors.blueAccent : Colors.transparent),
-                  width: 2),
-            ),
-            child: Center(
-              child: Text('${date.day}',
-                  style: TextStyle(
-                    fontWeight: isFocused ? FontWeight.bold : FontWeight.normal,
-                  )),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildHolidayCell(BuildContext context, DateTime date) {
-    // Customize holiday cell
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        shape: BoxShape.circle,
-      ),
-      child: Center(
-          child: Text('${date.day}', style: TextStyle(color: Colors.white))),
-    );
-  }
-
   Widget _buildOutsideCell(BuildContext context, DateTime date) {
     // Customize outside cell (days outside the current month)
     return Container(
@@ -2347,34 +2287,6 @@ VALUES $values;
       ),
       child: Center(
           child: Text('${date.day}', style: TextStyle(color: Colors.grey))),
-    );
-  }
-
-  Widget _buildRangeStartCell(BuildContext context, DateTime date) {
-    // Customize range start cell
-    return Container(
-      decoration: BoxDecoration(
-          color: Colors.green[200],
-          borderRadius: BorderRadius.only(
-            topLeft: Radius.circular(10),
-            bottomLeft: Radius.circular(10),
-          )),
-      child: Center(
-          child: Text('${date.day}', style: TextStyle(color: Colors.white))),
-    );
-  }
-
-  Widget _buildRangeEndCell(BuildContext context, DateTime date) {
-    // Customize range end cell
-    return Container(
-      decoration: BoxDecoration(
-          color: Colors.green[200],
-          borderRadius: BorderRadius.only(
-            topRight: Radius.circular(10),
-            bottomRight: Radius.circular(10),
-          )),
-      child: Center(
-          child: Text('${date.day}', style: TextStyle(color: Colors.white))),
     );
   }
 
@@ -2658,6 +2570,23 @@ VALUES $values;
   //end of the calendar page
 }
 
+class StaticDigitalClock extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 200,
+      child: DigitalClock(
+        hourMinuteDigitTextStyle: const TextStyle(fontSize: 100),
+        colon: const Icon(Icons.ac_unit_sharp, size: 35),
+        colonDecoration: BoxDecoration(
+          border: Border.all(),
+          shape: BoxShape.circle,
+        ),
+      ),
+    );
+  }
+}
+
 class CalendarDayCell extends StatelessWidget {
   final DateTime date;
   final bool isToday;
@@ -2706,12 +2635,10 @@ class CalendarDayCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Set<String> uniqueTitles = Set();
-    Set<String> flagUrls = Set();
+    Set<String> flagUrls = {};
     bool hasPrivateHoliday = false;
 
     for (Event event in DayEvents) {
-      uniqueTitles.add(event.title);
       if (event.username == "HolidayApi" && event.isPrivate) {
         hasPrivateHoliday = true;
       }
@@ -2720,10 +2647,11 @@ class CalendarDayCell extends StatelessWidget {
       }
     }
 
-    int eventCount = uniqueTitles.length;
+    int eventCount = DayEvents.length;
     bool allowInteractions = context
             .findAncestorStateOfType<CalendarPageState>()!
-            .activePointerCount <
+            .activePointerCount
+            .value <
         2;
 
     return ValueListenableBuilder<Set<DateTime>>(
@@ -2731,6 +2659,7 @@ class CalendarDayCell extends StatelessWidget {
       builder: (context, selectedDays, child) {
         bool isSelected = selectedDays.contains(date);
         bool isHolidayDay = isHoliday?.call(date) ?? false;
+        bool isCurrentlyFocused = isFocused ?? false;
 
         DateTime prevDay = date.subtract(Duration(days: 1));
         DateTime nextDay = date.add(Duration(days: 1));
@@ -2766,32 +2695,70 @@ class CalendarDayCell extends StatelessWidget {
               ]
             : [];
 
-        // Adjust color for range middle
-        Color backgroundColorForRange = isSelected
-            ? isRangeStart || isRangeEnd
-                ? Colors.lightBlue // Lighter color for range ends
-                : Colors.lightBlue // Slightly darker for range middle
-            : backgroundColor;
-        double borderWidth = isSelected
-            ? 1.0
-            : isHolidayDay
-                ? 1.0
-                : 0.0;
+        // Determine the final background based on the states
+        Widget backgroundWidget;
+        if (flagUrls.isNotEmpty) {
+          backgroundWidget = Stack(
+            children: [
+              ClipRect(
+                child: OverflowBox(
+                  minWidth: 0.0,
+                  minHeight: 0.0,
+                  maxWidth: double.infinity,
+                  maxHeight: double.infinity,
+                  child: Transform(
+                    alignment: Alignment.center,
+                    transform: Matrix4.identity()
+                      ..scale(1.0, 2.0), // Flip horizontally
+                    child: Opacity(
+                      opacity: 0.8,
+                      child: Image.network(flagUrls.first, fit: BoxFit.cover),
+                    ),
+                  ),
+                ),
+              ),
+              if (isSelected || isCurrentlyFocused)
+                Container(
+                  color: Colors.black.withOpacity(0.3),
+                ),
+            ],
+          );
+        } else {
+          Color finalBackgroundColor = backgroundColor;
+          if (isSelected || isCurrentlyFocused) {
+            if (isHolidayDay) {
+              finalBackgroundColor = hasPrivateHoliday
+                  ? Colors.purple.withOpacity(0.8)
+                  : Colors.red.withOpacity(0.8);
+            } else {
+              finalBackgroundColor = Colors.lightBlue;
+            }
+          } else if (isHolidayDay) {
+            finalBackgroundColor = hasPrivateHoliday
+                ? Colors.purple.withOpacity(0.6)
+                : Colors.red.withOpacity(0.6);
+          } else if (isCurrentlyFocused) {
+            finalBackgroundColor = Colors.blue[300]!;
+          }
+
+          backgroundWidget = Container(color: finalBackgroundColor);
+        }
+
+        // Determine the final border width
+        double finalBorderWidth =
+            isSelected || isHolidayDay || isCurrentlyFocused ? 1.0 : 0.0;
+
+        // Determine the final border color
         Color finalBorderColor;
         if (isSelected && isHolidayDay) {
-          // If the day is both selected and a holiday, use green border
           finalBorderColor = Colors.green;
         } else if (isSelected) {
-          // If the day is only selected, use blue border
           finalBorderColor = Colors.blue;
         } else if (isHolidayDay) {
-          // If it's a holiday but not selected, use a different color, e.g., blue
-          finalBorderColor = Colors.blue;
-        } else if (isFocused ?? false) {
-          // If the day is focused, use a slightly darker blue
-          finalBorderColor = Colors.blue[400] ?? Colors.blue;
+          finalBorderColor = Colors.red;
+        } else if (isCurrentlyFocused) {
+          finalBorderColor = Colors.blue[400]!;
         } else {
-          // Default border color when no other conditions are met
           finalBorderColor = borderColor;
         }
 
@@ -2804,51 +2771,29 @@ class CalendarDayCell extends StatelessWidget {
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 300),
             decoration: BoxDecoration(
-              color: isSelected
-                  ? backgroundColorForRange
-                  : isHolidayDay
-                      ? (hasPrivateHoliday
-                          ? Colors.purple.withOpacity(0.6)
-                          : Colors.red.withOpacity(0.6))
-                      : (isFocused ?? true)
-                          ? Colors.blue[300]
-                          : backgroundColor,
               borderRadius: borderRadius,
-              border: Border.all(color: finalBorderColor, width: borderWidth),
+              border:
+                  Border.all(color: finalBorderColor, width: finalBorderWidth),
               boxShadow: boxShadow,
             ),
             child: Stack(
               clipBehavior: Clip.antiAlias,
               children: [
-                if (flagUrls.isNotEmpty) backgroundFlagImage(flagUrls.first),
+                backgroundWidget,
                 Center(
-                    child: Text('${date.day}',
-                        style: textStyle.copyWith(
-                            color: isSelected ? Colors.white : textColor))),
+                  child: Text(
+                    '${date.day}',
+                    style: textStyle.copyWith(
+                      color: isSelected ? Colors.white : textColor,
+                    ),
+                  ),
+                ),
                 if (eventCount > 0) eventIndicator(eventCount),
               ],
             ),
           ),
         );
       },
-    );
-  }
-
-  Widget backgroundFlagImage(String url) {
-    return ClipRect(
-      child: OverflowBox(
-        minWidth: 0.0,
-        minHeight: 0.0,
-        maxWidth: double.infinity,
-        maxHeight: double.infinity,
-        child: Transform.scale(
-          scale: 2.0,
-          child: Opacity(
-            opacity: 0.8,
-            child: Image.network(url, fit: BoxFit.cover),
-          ),
-        ),
-      ),
     );
   }
 
@@ -2862,8 +2807,10 @@ class CalendarDayCell extends StatelessWidget {
           color: Colors.red,
           shape: BoxShape.circle,
         ),
-        child: Text('$eventCount',
-            style: TextStyle(color: Colors.white, fontSize: 12)),
+        child: Text(
+          '$eventCount',
+          style: TextStyle(color: Colors.white, fontSize: 12),
+        ),
       ),
     );
   }

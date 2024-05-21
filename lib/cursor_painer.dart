@@ -5,8 +5,11 @@ class CursorPainter extends CustomPainter {
   final double radius;
   final Color color;
 
-  CursorPainter(
-      {this.cursorPosition, this.radius = 20.0, this.color = Colors.red});
+  CursorPainter({
+    this.cursorPosition,
+    this.radius = 20.0,
+    this.color = Colors.red,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -21,6 +24,36 @@ class CursorPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CursorPainter oldDelegate) {
-    return oldDelegate.cursorPosition != cursorPosition;
+    return oldDelegate.cursorPosition != cursorPosition ||
+        oldDelegate.radius != radius ||
+        oldDelegate.color != color;
+  }
+}
+
+class CursorPainterWidget extends StatelessWidget {
+  final Offset cursorPosition;
+  final double radius;
+  final Color color;
+
+  const CursorPainterWidget({
+    Key? key,
+    required this.cursorPosition,
+    required this.radius,
+    required this.color,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: CustomPaint(
+          painter: CursorPainter(
+            cursorPosition: cursorPosition,
+            radius: radius,
+            color: color,
+          ),
+        ),
+      ),
+    );
   }
 }
