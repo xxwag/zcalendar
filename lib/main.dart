@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:zcalendar/database_helper.dart';
 import 'package:zcalendar/ngrok.dart';
 
 import '/calendar_page.dart'; // Make sure to import the CalendarPage class correctly
@@ -9,7 +10,7 @@ Future<void> main() async {
   await NgrokManager.fetchNgrokData();
   // Delete the database to start fresh
 
-  //await DatabaseHelper.instance.deleteDB();
+  await DatabaseHelper.instance.deleteDB();
 
   initializeDateFormatting().then((_) => runApp(MyApp()));
 }

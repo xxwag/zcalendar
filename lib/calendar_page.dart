@@ -1,9 +1,11 @@
+// ignore_for_file: unused_element, avoid_print
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-
-import 'package:flutter/gestures.dart';
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
@@ -13,13 +15,12 @@ import 'package:table_calendar/table_calendar.dart';
 import 'package:http/http.dart' as http;
 // For date formatting
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:zcalendar/cursor_painer.dart';
 import 'package:zcalendar/database_helper.dart';
 import 'package:zcalendar/ngrok.dart';
 import 'package:zcalendar/widgets/countries_dialogue.dart';
-import 'package:slide_digital_clock/slide_digital_clock.dart';
 import 'package:zcalendar/widgets/functional_button.dart';
+import 'package:zcalendar/widgets/static_dclock.dart';
 import 'package:zcalendar/widgets/tragic_widgets.dart';
 import 'events.dart';
 import 'package:path_provider/path_provider.dart';
@@ -66,42 +67,46 @@ class UserDataWidget extends StatelessWidget {
 }
 
 class CalendarPage extends StatefulWidget {
-  const CalendarPage({Key? key}) : super(key: key); // Modified constructor
+  const CalendarPage({super.key}); // Modified constructor
 
   @override
-  CalendarPageState createState() => CalendarPageState();
+  _CalendarPageState createState() => _CalendarPageState();
 }
 
-class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
-  Set<DateTime> printedDates = Set(); // To keep track of printed dates
-  DataSource _dataSource = DataSource.online; // Default to online
+class _CalendarPageState extends State<CalendarPage> with ChangeNotifier {
+  Set<DateTime> printedDates = {}; // To keep track of printed dates
+  final DataSource _dataSource = DataSource.online; // Default to online
 // This tracks whether selection mode is active
   bool _isGroupSelectionEnabled = false; // Track group selection mode
   bool isHeaderVisible = false;
-  GlobalKey<CalendarPageState> calendarPageKey = GlobalKey<CalendarPageState>();
+  GlobalKey<_CalendarPageState> calendarPageKey =
+      GlobalKey<_CalendarPageState>();
   bool _imagesLoaded = false;
   bool _dataLoaded = false;
 
   DateTime? _selectedDay = DateTime.now();
 
-  GlobalKey _calendarKey = GlobalKey();
+  final GlobalKey _calendarKey = GlobalKey();
   double rowHeight = 65.0; // Default row height
-  double _initialRowHeight = 65.0;
-  static const int columns = 7; // Typically 7 days in a week
-  static const int rows = 6; // Maximum number of weeks visible in a month view
-  CalendarFormat _calendarFormat = CalendarFormat.month;
+  final double _initialRowHeight = 65.0;
+// Typically 7 days in a week
+// Maximum number of weeks visible in a month view
+  final CalendarFormat _calendarFormat = CalendarFormat.month;
 
-  static const int debounceMillis = 1000; // Debounce time for gestures
+// Debounce time for gestures
   Map<DateTime, List<Event>> events = {};
   Map<DateTime, List<Event>> holidays = {};
 
   String userAuthorizationLevel = ''; // Move userAuthorizationLevel here
   String? userToken; // Add userToken here
   List<String>? selectedCountries;
-  Set<DateTime> selectedDays = Set(); // Tracks multiple selected days
+  Set<DateTime> selectedDays = {}; // Tracks multiple selected days
   List<Map<String, dynamic>> unifiedStructuredData = [];
   DateTime? _lastToggledDay;
-
+  String? _nameday;
+  String? _nextNameday;
+  String? _todayDate;
+  String? _tomorrowDate;
   List<int> workingDays = [
     DateTime.monday,
     DateTime.tuesday,
@@ -109,17 +114,15 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
     DateTime.thursday,
     DateTime.friday
   ];
-  ValueNotifier<Offset?> _cursorPosition = ValueNotifier<Offset?>(null);
-  ValueNotifier<bool> _isScaling = ValueNotifier<bool>(false);
-  bool groupByCountry = false; // This will track the toggle state
-  Offset _initialFocalPoint = Offset.zero;
+  final ValueNotifier<Offset?> _cursorPosition = ValueNotifier<Offset?>(null);
+  final ValueNotifier<bool> _isScaling = ValueNotifier<bool>(false);
+  ValueNotifier<bool> groupByCountry = ValueNotifier<bool>(false);
   double _initialScale = 1.0;
-  double _initialDistance = 0.0;
 
   ValueNotifier<int> activePointerCount = ValueNotifier<int>(0);
 // Default size initialization
 // Default position initialization
-  double _calendarMaxHeight = 600; // Default maximum height
+// Default maximum height
   // Sample working hours
   Map<int, WorkHours> workingHours = {
     DateTime.monday: WorkHours(
@@ -145,7 +148,7 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
 // Directly compute startYear and endYear based on the current time
   DateTime startDateTime = DateTime(DateTime.now().year - 30, 1, 1);
   DateTime endDateTime = DateTime(DateTime.now().year + 30, 12, 31, 23, 59, 59);
-  ValueNotifier<DateTime> _focusedDayNotifier =
+  final ValueNotifier<DateTime> _focusedDayNotifier =
       ValueNotifier<DateTime>(DateTime.now());
   late ValueNotifier<Set<DateTime>> selectedDaysNotifier;
   Map<String, String?> seasonImages = {
@@ -168,19 +171,64 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
     'Early Autumn': 'initial_image_url_for_early_autumn',
     'Autumn': 'initial_image_url_for_autumn',
   };
-  ValueNotifier<String?> _backgroundImageNotifier =
+  final ValueNotifier<String?> _backgroundImageNotifier =
       ValueNotifier<String?>(null);
+  List<String> cheerfulEmojis = [
+    '😊',
+    '🎉',
+    '🌟',
+    '🌞',
+    '🌈',
+    '🎈',
+    '🎊',
+    '💐',
+    '🎵',
+    '🎶',
+    '✨',
+    '🎁',
+    '🎂',
+    '🍰',
+    '🍭',
+    '🍬',
+    '🍫',
+    '🍪',
+    '🍩',
+    '🍦',
+    '🍧',
+    '🍨',
+    '🍿',
+    '🍺',
+    '🍻',
+    '🥂',
+    '🥳',
+    '💃',
+    '🕺',
+    '🎸',
+    '🎺',
+    '🎷'
+  ];
+
+  String getRandomCheerfulEmoji() {
+    final random = Random();
+    return cheerfulEmojis[random.nextInt(cheerfulEmojis.length)];
+  }
 
   @override
   void initState() {
+    _preloadSeasonImages();
     selectedDaysNotifier = ValueNotifier<Set<DateTime>>({});
     _loadData();
+    _initializeNameday();
     _fetchUserAuthorizationLevel();
     _performMaintenanceCheck(context);
     // _loadEvents();
+    DateTime now = DateTime.now();
+    DateTime today =
+        DateTime(now.year, now.month, now.day); // Normalize the date
 
-    _preloadSeasonImages();
+    addDummyEvents(today, events);
 
+    // _loadResources();
     super.initState();
   }
 
@@ -213,28 +261,113 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
     final List<Widget> timelineWidgets = [];
     final dayEvents = getEventsForDay(day);
 
+    if (_nameday != null && _nextNameday != null) {
+      timelineWidgets.add(
+        Container(
+          padding: const EdgeInsets.symmetric(vertical: 16.0, horizontal: 24.0),
+          margin: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Colors.blueAccent, Colors.lightBlueAccent],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                spreadRadius: 1,
+                blurRadius: 5,
+                offset: const Offset(0, 3),
+              ),
+            ],
+            borderRadius: BorderRadius.circular(12.0),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              RichText(
+                text: TextSpan(
+                  children: [
+                    const TextSpan(
+                      text: 'Namedays:\n',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    TextSpan(
+                      text: '$_todayDate: $_nameday\n',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w400,
+                        color: Colors.white70,
+                      ),
+                    ),
+                    TextSpan(
+                      text: '$_tomorrowDate: $_nextNameday',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w400,
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(
+                Icons.cake,
+                color: Colors.white,
+                size: 30,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     if (dayEvents.isEmpty) {
       timelineWidgets.add(const Text('No events for today.'));
     } else {
-      for (var event in dayEvents) {
-        TimeOfDay? startTime = parseTime(event.startTime);
-        TimeOfDay? endTime = parseTime(event.endTime);
-        String startTimeString =
-            startTime != null ? startTime.format(context) : '';
-        String endTimeString = endTime != null ? endTime.format(context) : '';
+      if (dayEvents.length <= 3) {
+        // If events fit in the available space, display them in a scrollable list
+        timelineWidgets.add(
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 200),
+            child: SingleChildScrollView(
+              child: Column(
+                children: dayEvents.map((event) {
+                  TimeOfDay? startTime = parseTime(event.startTime);
+                  TimeOfDay? endTime = parseTime(event.endTime);
+                  String startTimeString =
+                      startTime != null ? startTime.format(context) : '';
+                  String endTimeString =
+                      endTime != null ? endTime.format(context) : '';
 
-        timelineWidgets.add(ListTile(
-          leading: Text(startTimeString),
-          title: Row(
-            children: [
-              if (event.flagUrl != null)
-                Image.network(event.flagUrl!, width: 20, height: 20),
-              const SizedBox(width: 8),
-              Text(event.title),
-            ],
+                  return ListTile(
+                    leading: Text(startTimeString),
+                    title: Row(
+                      children: [
+                        if (event.flagUrl != null)
+                          Image.network(event.flagUrl!, width: 20, height: 20),
+                        const SizedBox(width: 8),
+                        Text(event.title),
+                      ],
+                    ),
+                    trailing: Text(endTimeString),
+                  );
+                }).toList(),
+              ),
+            ),
           ),
-          trailing: Text(endTimeString),
-        ));
+        );
+      } else {
+        // If too many events, use an animated widget to iterate over them
+        timelineWidgets.add(
+          SizedBox(
+            child: _AnimatedEventList(dayEvents: dayEvents),
+          ),
+        );
       }
     }
     return timelineWidgets;
@@ -292,14 +425,13 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
 
   // Function to extract the table count from the response data
   int? extractTableCount(Map<String, dynamic> responseData) {
-    try {
-      final results = responseData['results'] as List<dynamic>;
-      if (results.isNotEmpty) {
-        final countData = results[0] as Map<String, dynamic>;
-        final countValue = countData['COUNT(*)'] as int?;
-        return countValue;
-      }
-    } catch (e) {}
+    final results = responseData['results'] as List<dynamic>;
+    if (results.isNotEmpty) {
+      final countData = results[0] as Map<String, dynamic>;
+      final countValue = countData['COUNT(*)'] as int?;
+      return countValue;
+    }
+
     return null;
   }
 
@@ -339,28 +471,6 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
     return completer.future;
   }
 
-  // Function to show the user notification
-  void _showUserNotification() {
-    showDialog(
-      context: context, // Make sure you have access to the BuildContext
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Data Not Available'),
-          content:
-              const Text('Contact your administrator, data does not exist.'),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('OK'),
-              onPressed: () {
-                Navigator.of(context).pop(); // Close the dialog
-              },
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -389,17 +499,15 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
 
     // Fetch image URL from API
     for (final apiKey in unsplashApiKeys) {
-      try {
-        final response = await http.get(Uri.parse(apiBaseUrl), headers: {
-          'Authorization': 'Client-ID $apiKey',
-        });
+      final response = await http.get(Uri.parse(apiBaseUrl), headers: {
+        'Authorization': 'Client-ID $apiKey',
+      });
 
-        if (response.statusCode == 200) {
-          final imageData = json.decode(response.body);
-          final String imageUrl = imageData['urls']['regular'];
-          return imageUrl; // Exit the loop if an image is fetched successfully
-        } else {}
-      } catch (e) {}
+      if (response.statusCode == 200) {
+        final imageData = json.decode(response.body);
+        final String imageUrl = imageData['urls']['regular'];
+        return imageUrl; // Exit the loop if an image is fetched successfully
+      } else {}
     }
 
     // If none of the API keys work or an error occurs in all attempts
@@ -430,40 +538,48 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
     }
   }
 
-  Future<Map<String, dynamic>?> getCountryInfoFromCoordinates(
-      double latitude, double longitude) async {
-    final url =
-        'https://nominatim.openstreetmap.org/reverse?format=json&lat=$latitude&lon=$longitude';
+  Future<Position?> getCurrentLocation() async {
+    bool serviceEnabled;
+    LocationPermission permission;
 
-    try {
-      final response = await http.get(Uri.parse(url));
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      return Future.error('Location services are disabled.');
+    }
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
+    permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        return Future.error('Location permissions are denied');
+      }
+    }
 
-        // Extract the country name and country code from the response
-        final country = data['address']['country'];
-        final countryCode = data['address']['country_code'];
+    if (permission == LocationPermission.deniedForever) {
+      return Future.error(
+          'Location permissions are permanently denied, we cannot request permissions.');
+    }
 
-        // Create a map to store both the country name and country code
-        final countryInfo = {
-          'country': country,
-          'countryCode': countryCode,
-        };
-
-        return countryInfo;
-      } else {}
-    } catch (e) {}
-
-    return null;
+    return await Geolocator.getCurrentPosition();
   }
 
-  Future<Position?> getCurrentLocation() async {
+  Future<Map<String, dynamic>?> getCountryInfoFromCoordinates(
+      double latitude, double longitude) async {
+    final Dio dio = Dio();
     try {
-      final Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-      return position;
+      final response = await dio.get(
+          'https://api.bigdatacloud.net/data/reverse-geocode-client',
+          queryParameters: {
+            'latitude': latitude,
+            'longitude': longitude,
+            'localityLanguage': 'en'
+          });
+
+      if (response.statusCode == 200) {
+        return response.data;
+      } else {
+        return null;
+      }
     } catch (e) {
       return null;
     }
@@ -483,8 +599,6 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
               await getCountryInfoFromCoordinates(latitude, longitude);
 
           if (countryInfo != null) {
-            // Access the country name and country code
-
             return countryInfo;
           } else {
             return null;
@@ -492,16 +606,70 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
         } else {
           return null;
         }
-      } else if (status.isDenied) {
-        return null;
-      } else if (status.isPermanentlyDenied) {
-        // Handle this case differently if needed.
+      } else if (status.isDenied || status.isPermanentlyDenied) {
         return null;
       } else {
         return null;
       }
     } catch (e) {
       return null;
+    }
+  }
+
+  Future<Map<String, dynamic>?> fetchNameday(
+      String country, String endpoint) async {
+    final Dio dio = Dio();
+    try {
+      final response = await dio
+          .get('https://nameday.abalin.net/api/V1/$endpoint', queryParameters: {
+        'country': country,
+      });
+
+      if (response.statusCode == 200) {
+        return response.data;
+      } else {
+        return null;
+      }
+    } catch (e) {
+      return null;
+    }
+  }
+
+  Future<void> _initializeNameday() async {
+    DateTime now = DateTime.now();
+    DateTime today = DateTime(now.year, now.month, now.day);
+    DateTime tomorrow = today.add(const Duration(days: 1));
+
+    // Format dates as day.month
+    String formatDate(DateTime date) => '${date.day}.${date.month}';
+
+    Map<String, dynamic>? countryInfo = await fetchCountryForCurrentUser();
+    if (countryInfo != null && countryInfo['countryCode'] != null) {
+      String countryCode = countryInfo['countryCode'];
+      Map<String, dynamic>? todayNamedayData =
+          await fetchNameday(countryCode.toLowerCase(), 'today');
+      Map<String, dynamic>? tomorrowNamedayData =
+          await fetchNameday(countryCode.toLowerCase(), 'tomorrow');
+
+      if (todayNamedayData != null &&
+          todayNamedayData['nameday'] != null &&
+          tomorrowNamedayData != null &&
+          tomorrowNamedayData['nameday'] != null) {
+        String languageCode = countryInfo['principalSubdivisionCode'] != null
+            ? countryInfo['principalSubdivisionCode']
+                .split('-')[0]
+                .toLowerCase()
+            : countryCode.toLowerCase(); // fallback to country code
+
+        setState(() {
+          _nameday =
+              '${todayNamedayData['nameday'][languageCode]} ${getRandomCheerfulEmoji()}';
+          _nextNameday =
+              '${tomorrowNamedayData['nameday'][languageCode]} ${getRandomCheerfulEmoji()}';
+          _todayDate = formatDate(today);
+          _tomorrowDate = formatDate(tomorrow);
+        });
+      }
     }
   }
 
@@ -544,14 +712,15 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
       'pretty': 'true', // Include the 'pretty' parameter
     };
 
-    final uri = Uri.parse(baseUrl).replace(queryParameters: params);
+    final uri = Uri.parse(baseUrl).replace(queryParameters: params).toString();
 
     try {
-      final response = await http.get(uri);
+      final Dio dio = Dio();
+      final response = await dio.get(uri);
 
       if (response.statusCode == 200) {
         final List<Map<String, dynamic>> countryList =
-            (json.decode(response.body)['countries'] as List)
+            (response.data['countries'] as List)
                 .map((country) => Map<String, dynamic>.from(country))
                 .toList();
 
@@ -560,6 +729,7 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
         return null; // Return null to indicate an error
       }
     } catch (e) {
+      print('Error fetching country list: $e');
       return null; // Return null to indicate an error
     }
   }
@@ -569,17 +739,17 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
           context: context,
           builder: (BuildContext context) {
             return AlertDialog(
-              title: Text("Select Mode"),
-              content: Text(
+              title: const Text("Select Mode"),
+              content: const Text(
                   "Would you like to use the app in online or offline mode?"),
               actions: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(true), // online
-                  child: Text("Online"),
+                  child: const Text("Online"),
                 ),
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(false), // offline
-                  child: Text("Offline"),
+                  child: const Text("Offline"),
                 ),
               ],
             );
@@ -653,7 +823,11 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
 
       if (entries.isEmpty) {
         // The "events" table exists but contains no entries. Proceed with inserting initial data
-        print("No entries found in events table. Initializing data...");
+        if (kDebugMode) {
+          if (kDebugMode) {
+            print("No entries found in events table. Initializing data...");
+          }
+        }
 
         await _createCalendarTableAndData(context, '');
         await _loadData();
@@ -779,7 +953,10 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
           }
         }
       } else {
-        print('Failed to load events with status code: ${response.statusCode}');
+        if (kDebugMode) {
+          print(
+              'Failed to load events with status code: ${response.statusCode}');
+        }
       }
     } catch (e) {
       print('Failed to load events: $e');
@@ -828,11 +1005,7 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
         }
       }
       print(events);
-      DateTime now = DateTime.now();
-      DateTime today =
-          DateTime(now.year, now.month, now.day); // Normalize the date
-
-      addDummyEvents(today, events);
+// Normalize the date
 
       print(events);
 
@@ -925,27 +1098,26 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
     String? mode =
         prefs.getString('mode') ?? 'offline'; // Assume 'offline' if not set
 
-    try {
-      // Define the list of steps
-      final List<Step> steps = [
-        Step(
-          description: 'Creating the calendar table...',
-          action: () async {
-            showDialog(
-              context: context,
-              barrierDismissible: false,
-              builder: (context) {
-                return CustomLoadingWidget(
-                  message: 'Preparing calendar data...',
-                  stepDescription: 'Step 1',
-                  onConfirm: (bool2) {},
-                );
-              },
-            );
+    // Define the list of steps
+    final List<Step> steps = [
+      Step(
+        description: 'Creating the calendar table...',
+        action: () async {
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) {
+              return CustomLoadingWidget(
+                message: 'Preparing calendar data...',
+                stepDescription: 'Step 1',
+                onConfirm: (bool2) {},
+              );
+            },
+          );
 
-            if (mode == 'online') {
-              // Online mode: execute query to create table on remote server
-              const String createTableQuery = '''
+          if (mode == 'online') {
+            // Online mode: execute query to create table on remote server
+            const String createTableQuery = '''
               CREATE TABLE IF NOT EXISTS calendar_main (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 event_name VARCHAR(255) NOT NULL,
@@ -958,29 +1130,29 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
               )
             ''';
 
-              try {
-                await _sendQueryToEndpoint(createTableQuery, userToken);
-              } catch (e) {
-                // Handle the error
-              } finally {
-                Navigator.of(context)
-                    .pop(); // Close the dialog regardless of the result
-              }
-            } else {
-              // Offline mode: Use DatabaseHelper to initialize the SQLite database
-              try {
-                await DatabaseHelper.instance.database;
-              } catch (e) {
-                // Handle the error
-                print("Error during table creation: $e");
-              } finally {
-                Navigator.of(context)
-                    .pop(); // Close the dialog regardless of the result
-              }
+            try {
+              await _sendQueryToEndpoint(createTableQuery, userToken);
+            } catch (e) {
+              // Handle the error
+            } finally {
+              Navigator.of(context)
+                  .pop(); // Close the dialog regardless of the result
             }
-          },
-        ),
-        Step(
+          } else {
+            // Offline mode: Use DatabaseHelper to initialize the SQLite database
+            try {
+              await DatabaseHelper.instance.database;
+            } catch (e) {
+              // Handle the error
+              print("Error during table creation: $e");
+            } finally {
+              Navigator.of(context)
+                  .pop(); // Close the dialog regardless of the result
+            }
+          }
+        },
+      ),
+      Step(
           description: 'Fetching current country and national holidays...',
           action: () async {
             final Map<String, dynamic>? countryInfo =
@@ -1033,151 +1205,145 @@ class CalendarPageState extends State<CalendarPage> with ChangeNotifier {
             );
 
             if (addDataForCurrentCountry) {
-              try {
-                final nationalHolidays = await fetchNationalHolidays(
-                  countryCode!,
-                  2023,
-                  'e95d7d2d-42b4-4b5f-8fa5-348e1f1e550e',
-                  true, // Include the 'subdivisions' parameter
-                );
+              final nationalHolidays = await fetchNationalHolidays(
+                countryCode!,
+                2024,
 
-                if (nationalHolidays != null && nationalHolidays.isNotEmpty) {
-                  if (!storedCountries.contains(countryCode)) {
-                    storedCountries
-                        .add(countryCode); // Add the country to the list
-                  }
-                } else {}
-
-                // Log when the step is finished
-              } catch (e) {}
-            }
-          },
-        ),
-
-        Step(
-          description: 'Add Data for Another Country?',
-          action: () async {
-            countryData = (await fetchCountryList(
-                'e95d7d2d-42b4-4b5f-8fa5-348e1f1e550e'))!; // Fetch and store in the larger scope
-            print('country data: $countryData');
-            if (countryData.isNotEmpty) {
-              await _storeCountriesInDatabase(countryData, userToken);
-              selectedCountries = await showDialog<List<String>>(
-                context: context,
-                builder: (context) => SelectCountriesDialog(
-                    countryData: countryData,
-                    selectedCountries: selectedCountries),
+                'e95d7d2d-42b4-4b5f-8fa5-348e1f1e550e',
+                true, // Include the 'subdivisions' parameter
               );
 
-              if (selectedCountries!.isNotEmpty) {
-                bool fetchConfirmed = await showDialog<bool>(
-                        context: context,
-                        builder: (context) => ConfirmFetchDialog(
-                            selectedCountries: selectedCountries)) ??
-                    false;
+              if (nationalHolidays != null && nationalHolidays.isNotEmpty) {
+                if (!storedCountries.contains(countryCode)) {
+                  storedCountries
+                      .add(countryCode); // Add the country to the list
+                }
+              }
 
-                if (fetchConfirmed) {
-                  selectedCountries = selectedCountries!.toSet().toList();
-                  selectedCountries!.removeWhere(
-                      (country) => storedCountries.contains(country));
+              // Log when the step is finished
+            }
+          }),
 
-                  List<String>? modifiedCountries =
-                      await showDialog<List<String>>(
-                    context: context,
-                    builder: (context) => ModifyCountriesDialog(
-                        selectedCountries: selectedCountries,
-                        countryData: countryData),
-                  );
+      Step(
+        description: 'Add Data for Another Country?',
+        action: () async {
+          countryData = (await fetchCountryList(
+              'e95d7d2d-42b4-4b5f-8fa5-348e1f1e550e'))!; // Fetch and store in the larger scope
+          print('country data: $countryData');
 
-                  if (modifiedCountries != null &&
-                      modifiedCountries.isNotEmpty) {
-                    selectedCountries = modifiedCountries;
+          if (countryData.isNotEmpty) {
+            /*    await _storeCountriesInDatabase(countryData, userToken);*/
+            selectedCountries = await showDialog<List<String>>(
+              context: context,
+              builder: (context) => SelectCountriesDialog(
+                  countryData: countryData,
+                  selectedCountries: selectedCountries),
+            );
+            print('wtf');
+            if (selectedCountries!.isNotEmpty) {
+              bool fetchConfirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (context) => ConfirmFetchDialog(
+                          selectedCountries: selectedCountries)) ??
+                  false;
 
-                    for (String countryCode in selectedCountries!) {
-                      final holidayData = await fetchNationalHolidays(
-                          countryCode,
-                          DateTime.now().year - 1,
-                          'e95d7d2d-42b4-4b5f-8fa5-348e1f1e550e',
-                          true);
+              if (fetchConfirmed) {
+                selectedCountries = selectedCountries!.toSet().toList();
+                selectedCountries!.removeWhere(
+                    (country) => storedCountries.contains(country));
 
-                      if (holidayData != null) {
-                        fetchedData[countryCode] = holidayData;
-                        if (_dataSource == DataSource.online) {
-                          List<Map<String, dynamic>> structuredData =
-                              structureHolidayData(holidayData, countryCode);
-                          await insertHolidaysIntoDatabase(
-                              structuredData, userToken); // Online storage only
-                        }
+                List<String>? modifiedCountries =
+                    await showDialog<List<String>>(
+                  context: context,
+                  builder: (context) => ModifyCountriesDialog(
+                      selectedCountries: selectedCountries,
+                      countryData: countryData),
+                );
+
+                if (modifiedCountries != null && modifiedCountries.isNotEmpty) {
+                  selectedCountries = modifiedCountries;
+
+                  for (String countryCode in selectedCountries!) {
+                    final holidayData = await fetchNationalHolidays(
+                        countryCode,
+                        DateTime.now().year - 1,
+                        'e95d7d2d-42b4-4b5f-8fa5-348e1f1e550e',
+                        true);
+
+                    if (holidayData != null) {
+                      fetchedData[countryCode] = holidayData;
+                      if (_dataSource == DataSource.online) {
+                        List<Map<String, dynamic>> structuredData =
+                            structureHolidayData(holidayData, countryCode);
+
+                        //await insertHolidaysIntoDatabase(    structuredData, userToken); // Online storage only
                       }
                     }
                   }
                 }
               }
             }
-          },
-        ), // Add this step in the final List<Step> steps array
-        Step(
-          description:
-              'Structuring and inserting holiday data into database...',
-          action: () async {
-            try {
-              List<Map<String, dynamic>> allStructuredData = [];
-              // Create a dictionary for flag URLs using country code as key
-              Map<String, String> flagUrls = {
-                for (var country in countryData)
-                  country['code']: country['flag']
-              };
+          }
+        },
+      ), // Add this step in the final List<Step> steps array
+      Step(
+        description: 'Structuring and inserting holiday data into database...',
+        action: () async {
+          try {
+            List<Map<String, dynamic>> allStructuredData = [];
+            // Create a dictionary for flag URLs using country code as key
+            Map<String, String> flagUrls = {
+              for (var country in countryData) country['code']: country['flag']
+            };
 
-              // Iterate over each fetched country's data
-              for (String countryCode in fetchedData.keys) {
-                var structuredData =
-                    structureHolidayData(fetchedData[countryCode], countryCode);
-                // Add flag URL to each event in structured data
-                structuredData.forEach((data) {
-                  data['flagUrl'] = flagUrls[countryCode] ??
-                      'default_flag_url'; // Provide a default if null
-                });
-                allStructuredData.addAll(structuredData);
+            // Iterate over each fetched country's data
+            for (String countryCode in fetchedData.keys) {
+              var structuredData =
+                  structureHolidayData(fetchedData[countryCode], countryCode);
+              // Add flag URL to each event in structured data
+              for (var data in structuredData) {
+                data['flagUrl'] = flagUrls[countryCode] ??
+                    'default_flag_url'; // Provide a default if null
               }
-
-              if (mode == 'online') {
-                // Insert all structured holiday data into the online database
-                await insertHolidaysIntoDatabase(allStructuredData, userToken);
-              } else {
-                // Offline mode: Insert structured data into the SQLite database
-                for (var holidayData in allStructuredData) {
-                  Event newEvent = Event(
-                      title: holidayData['event_name'],
-                      isPrivate: holidayData['private'] == 1,
-                      isAllDay:
-                          true, // Assuming all holidays are all-day events
-                      date: DateTime.parse(holidayData['event_date']),
-                      startTime:
-                          null, // No specific start time for all-day events
-                      endTime: null, // No specific end time for all-day events
-                      flagUrl: holidayData[
-                          'flagUrl'], // Use the included or default flag URL
-                      username: "HolidayApi" // Example username in offline mode
-                      );
-
-                  // Inserting event into SQLite database
-                  await DatabaseHelper.instance.insertEvent(newEvent);
-                }
-              }
-            } catch (e) {
-              print('Error during data structuring or database operations: $e');
+              allStructuredData.addAll(structuredData);
             }
-          },
-        )
-      ];
 
-      for (int i = 0; i < steps.length; i++) {
-        // Log when the step is about to start
+            if (mode == 'online') {
+              // Insert all structured holiday data into the online database
+              await insertHolidaysIntoDatabase(allStructuredData, userToken);
+            } else {
+              // Offline mode: Insert structured data into the SQLite database
+              for (var holidayData in allStructuredData) {
+                Event newEvent = Event(
+                    title: holidayData['event_name'],
+                    isPrivate: holidayData['private'] == 1,
+                    isAllDay: true, // Assuming all holidays are all-day events
+                    date: DateTime.parse(holidayData['event_date']),
+                    startTime:
+                        null, // No specific start time for all-day events
+                    endTime: null, // No specific end time for all-day events
+                    flagUrl: holidayData[
+                        'flagUrl'], // Use the included or default flag URL
+                    username: "HolidayApi" // Example username in offline mode
+                    );
 
-        // Execute the action for the current step
-        await steps[i].action();
-      }
-    } catch (e) {}
+                // Inserting event into SQLite database
+                await DatabaseHelper.instance.insertEvent(newEvent);
+              }
+            }
+          } catch (e) {
+            print('Error during data structuring or database operations: $e');
+          }
+        },
+      )
+    ];
+
+    for (int i = 0; i < steps.length; i++) {
+      // Log when the step is about to start
+
+      // Execute the action for the current step
+      await steps[i].action();
+    }
   }
 
   Future<void> _storeCountriesInDatabase(
@@ -1512,7 +1678,7 @@ VALUES $values;
         maxHeight: calculatedMaxHeight,
         child: AnimatedOpacity(
           opacity: (isHeaderVisible || _isGroupSelectionEnabled) ? 1.0 : 0.0,
-          duration: Duration(milliseconds: 1500),
+          duration: const Duration(milliseconds: 1500),
           child: Container(
             color: Colors.transparent,
             child: _buildHeaderContent(),
@@ -1522,42 +1688,13 @@ VALUES $values;
     );
   }
 
-  Widget _buildSliverPersistentHeader2() {
-    return SliverPersistentHeader(
-      pinned: false,
-      floating: true,
-      delegate: _MySliverAppBarDelegate(
-        minHeight: 65.0,
-        maxHeight: 65.0,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 0.0),
-          decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.5), // Semi-transparent background
-          ),
-          child: SafeArea(
-            bottom: false,
-            child: Text(
-              'Events for ${DateFormat('MMMM yyyy').format(_focusedDayNotifier.value)}',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
-                color:
-                    Colors.white, // Text color to contrast with the background
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildHeaderContent() {
     List<Widget> buttons = [
       FunctionalButton(
-        label: "Permanent Button",
+        label: "Permanent ",
         icon: Icons.visibility,
-        color: Colors.blue,
         onPressed: () => print("Permanent button pressed"),
+        baseColor: Colors.black, // Example base color
       ),
     ];
 
@@ -1567,74 +1704,71 @@ VALUES $values;
         FunctionalButton(
           label: "Group On",
           icon: Icons.group,
-          color: Colors.green,
           onPressed: () => print("Group mode on"),
+          baseColor: Colors.black, // Example base color
+        ),
+        FunctionalButton(
+          label: "Group On",
+          icon: Icons.group,
+          onPressed: () => print("Group mode on"),
+          baseColor: Colors.black, // Example base color
+        ),
+        FunctionalButton(
+          label: "Group On",
+          icon: Icons.group,
+          onPressed: () => print("Group mode on"),
+          baseColor: Colors.black, // Example base color
         ),
         FunctionalButton(
           label: "Group Off",
           icon: Icons.group_off,
-          color: Colors.red,
-          onPressed: () => print("Group mode off"),
+          onPressed: _handleGroupOff,
+          baseColor: Colors.black, // Example base color
         ),
       ]);
     }
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: buttons,
-    );
-  }
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.bottomCenter,
+          end: Alignment.topCenter,
+          colors: [
+            Colors.white.withOpacity(0.95),
+            Colors.white.withOpacity(0.80),
+            Colors.white.withOpacity(0.65),
+          ],
+        ),
+      ),
+      padding:
+          const EdgeInsets.symmetric(vertical: 10), // Add padding if needed
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          double totalWidth = constraints.maxWidth;
+          double availableWidth = totalWidth -
+              (buttons.length - 1) *
+                  10.0; // 10.0 is the spacing between buttons
+          double buttonWidth = availableWidth / buttons.length;
 
-  Widget buildFlagHeader(Set<String> flags) {
-    List<Widget> flagWidgets = flags.map((url) {
-      return url.isNotEmpty
-          ? Image.network(url, width: 30, height: 20)
-          : Icon(Icons.sentiment_satisfied,
-              size: 30); // Default icon for empty URL
-    }).toList();
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Wrap(children: flagWidgets),
-    );
-  }
-
-  Widget buildOfficialHolidayList(List<Event> holidays) {
-    List<Widget> holidayWidgets = holidays
-        .map((holiday) => ListTile(
-              title: Text(holiday.title),
-              subtitle: Text(DateFormat('y MMMM d').format(holiday.date!)),
-              trailing: Icon(Icons.flag, color: Colors.red),
-            ))
-        .toList();
-
-    return Column(children: holidayWidgets);
-  }
-
-  Widget buildEventSection(String sectionTitle, List<Event> events) {
-    List<Widget> eventTiles = events
-        .map((event) => ListTile(
-              leading: Icon(
-                  event.isPrivate ? Icons.lock : Icons.event_available,
-                  color: event.isPrivate ? Colors.red : Colors.green),
-              title: Text(event.title),
-              subtitle: Text(
-                  "${event.date != null ? DateFormat('y MMMM d').format(event.date!) : 'Date not set'} | ${event.isAllDay ? 'All day' : '${event.startTime} - ${event.endTime}'}"),
-            ))
-        .toList();
-
-    return Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Text(sectionTitle,
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-          ),
-          ...eventTiles
-        ],
+          return Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: buttons.map((button) {
+              return Container(
+                width: buttonWidth,
+                child: button,
+              );
+            }).toList(),
+          );
+        },
       ),
     );
+  }
+
+  void _handleGroupOff() {
+    selectedDaysNotifier.value = {};
+    setState(() {
+      _isGroupSelectionEnabled = false;
+    });
   }
 
   List<Widget> _buildEventListForMonth(DateTime month) {
@@ -1663,16 +1797,6 @@ VALUES $values;
       }
     });
 
-    // Build a visual theme based on flags
-    if (uniqueFlags.isNotEmpty) {
-      eventWidgets.add(buildFlagHeader(uniqueFlags));
-    }
-
-    // Adding official holidays at the top
-    if (officialHolidays.isNotEmpty) {
-      eventWidgets.add(buildOfficialHolidayList(officialHolidays));
-    }
-
     // Sorting timed events by start time
     if (eventGroups.containsKey("Timed Events")) {
       eventGroups["Timed Events"]
@@ -1684,11 +1808,94 @@ VALUES $values;
       eventWidgets.add(buildEventSection(key, events));
     });
 
+// Build a visual theme based on flags and official holidays
+    if (uniqueFlags.isNotEmpty || officialHolidays.isNotEmpty) {
+      eventWidgets.add(
+        Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.white.withOpacity(0.5),
+                Colors.white.withOpacity(0.0),
+              ],
+              stops: const [0.0, 1.0],
+            ),
+          ),
+          child: Column(
+            children: [
+              // Build a visual theme based on flags
+              if (uniqueFlags.isNotEmpty) buildFlagHeader(uniqueFlags),
+
+              // Adding official holidays at the top
+              if (officialHolidays.isNotEmpty)
+                buildOfficialHolidayList(officialHolidays),
+            ],
+          ),
+        ),
+      );
+    }
+
     if (eventWidgets.isEmpty) {
-      eventWidgets.add(Center(child: Text('No events for this month.')));
+      eventWidgets.add(const Center(
+          child: Center(child: Text('No events for this month.'))));
     }
 
     return eventWidgets;
+  }
+
+  Widget buildFlagHeader(Set<String> flags) {
+    List<Widget> flagWidgets = flags.map((url) {
+      return url.isNotEmpty
+          ? Image.network(url, width: 30, height: 20)
+          : const Icon(Icons.sentiment_satisfied,
+              size: 30); // Default icon for empty URL
+    }).toList();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Wrap(children: flagWidgets),
+    );
+  }
+
+  Widget buildOfficialHolidayList(List<Event> holidays) {
+    List<Widget> holidayWidgets = holidays
+        .map((holiday) => ListTile(
+              title: Text(holiday.title),
+              subtitle: Text(DateFormat('y MMMM d').format(holiday.date!)),
+              trailing: const Icon(Icons.flag, color: Colors.red),
+            ))
+        .toList();
+
+    return Column(children: holidayWidgets);
+  }
+
+  Widget buildEventSection(String sectionTitle, List<Event> events) {
+    List<Widget> eventTiles = events
+        .map((event) => ListTile(
+              leading: Icon(
+                  event.isPrivate ? Icons.lock : Icons.event_available,
+                  color: event.isPrivate ? Colors.red : Colors.green),
+              title: Text(event.title),
+              subtitle: Text(
+                  "${event.date != null ? DateFormat('y MMMM d').format(event.date!) : 'Date not set'} | ${event.isAllDay ? 'All day' : '${event.startTime} - ${event.endTime}'}"),
+            ))
+        .toList();
+
+    return Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Text(sectionTitle,
+                style:
+                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+          ),
+          ...eventTiles
+        ],
+      ),
+    );
   }
 
   List<Widget> _buildEventListForMonthGrouped(DateTime month) {
@@ -1701,7 +1908,7 @@ VALUES $values;
     Map<DateTime, List<Event>> combinedEvents = {...events, ...holidays};
 
     // Default flag URL for events with no flag
-    final String defaultFlagUrl =
+    const String defaultFlagUrl =
         "https://m.media-amazon.com/images/I/51TrNDG7V1L._AC_UF894,1000_QL80_.jpg";
 
     // Collect flags for each event based on title and date
@@ -1709,9 +1916,8 @@ VALUES $values;
       if (date.month == month.month && date.year == month.year) {
         for (var event in eventList) {
           String baseKey = '${event.title}_${event.date}';
-          eventFlags.putIfAbsent(baseKey, () => Set<String>())
-            ..add(event.flagUrl ??
-                (event.isAllDay && event.isPrivate ? defaultFlagUrl : ''));
+          eventFlags.putIfAbsent(baseKey, () => <String>{}).add(event.flagUrl ??
+              (event.isAllDay && event.isPrivate ? defaultFlagUrl : ''));
         }
       }
     });
@@ -1730,8 +1936,9 @@ VALUES $values;
           String baseKey = '${event.title}_${event.date}';
           String flagsKey = flagsKeyMap[baseKey]!;
           String groupKey = '${baseKey}_$flagsKey';
-          eventGroups.putIfAbsent(groupKey, () => [])
-            ..add(event); // Use flagsKey to group by flags
+          eventGroups
+              .putIfAbsent(groupKey, () => [])
+              .add(event); // Use flagsKey to group by flags
         }
       }
     });
@@ -1739,12 +1946,12 @@ VALUES $values;
     // Aggregate similar groups based on flags and create widgets
     eventGroups.forEach((flagsKey, events) {
       List<Widget> flags =
-          eventFlags[events.first.title + '_' + '${events.first.date}']!
+          eventFlags['${events.first.title}_${events.first.date}']!
               .map((url) => Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 2),
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
                   child: url.isNotEmpty
                       ? Image.network(url, width: 30, height: 20)
-                      : Icon(Icons.flag, size: 30)))
+                      : const Icon(Icons.flag, size: 30)))
               .toList();
 
       Event representativeEvent = events.first;
@@ -1756,10 +1963,10 @@ VALUES $values;
                   : Colors.green[300],
               size: 12),
           title: Text(representativeEvent.title,
-              style: TextStyle(fontWeight: FontWeight.bold)),
+              style: const TextStyle(fontWeight: FontWeight.bold)),
           subtitle: Text(
               "${representativeEvent.date != null ? DateFormat('MMMM d, yyyy').format(representativeEvent.date!) : 'Date not set'} | ${representativeEvent.isAllDay ? 'All day' : '${representativeEvent.startTime} - ${representativeEvent.endTime}'}"),
-          trailing: Icon(Icons.arrow_forward_ios, size: 16),
+          trailing: const Icon(Icons.arrow_forward_ios, size: 16),
           onTap: () {},
         )
       ];
@@ -1767,12 +1974,12 @@ VALUES $values;
       // Construct the card for each group
       eventWidgets.add(Card(
         elevation: 4,
-        margin: EdgeInsets.all(8),
+        margin: const EdgeInsets.all(8),
         child: Column(
           children: [
             if (flags.isNotEmpty)
               Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Row(mainAxisSize: MainAxisSize.min, children: flags)),
             ...eventListTile
           ],
@@ -1782,7 +1989,7 @@ VALUES $values;
 
     // Handle case when no events are available
     if (eventWidgets.isEmpty) {
-      eventWidgets.add(Center(
+      eventWidgets.add(const Center(
           child: Text('No events for this month.',
               style: TextStyle(fontStyle: FontStyle.italic, fontSize: 16))));
     }
@@ -1794,7 +2001,7 @@ VALUES $values;
   Widget build(BuildContext context) {
     print('Building whole page');
     if (!_imagesLoaded || !_dataLoaded) {
-      return Scaffold(
+      return const Scaffold(
         body: Center(child: CircularProgressIndicator()),
       );
     }
@@ -1811,7 +2018,7 @@ VALUES $values;
                         File(backgroundImage),
                         fit: BoxFit.cover,
                         errorBuilder: (context, error, stackTrace) =>
-                            Icon(Icons.error),
+                            const Icon(Icons.error),
                       )
                     : Container(
                         color: Colors.black), // Fallback for missing image
@@ -1821,14 +2028,14 @@ VALUES $values;
           ValueListenableBuilder<DateTime>(
             valueListenable: _focusedDayNotifier,
             builder: (context, focusedDay, child) {
-              List<Widget> eventWidgets = !groupByCountry
+              List<Widget> eventWidgets = !groupByCountry.value
                   ? _buildEventListForMonth(focusedDay)
                   : _buildEventListForMonthGrouped(focusedDay);
 
               return CustomScrollView(
                 physics: activePointerCount.value >= 2
-                    ? NeverScrollableScrollPhysics()
-                    : BouncingScrollPhysics(),
+                    ? const NeverScrollableScrollPhysics()
+                    : const BouncingScrollPhysics(),
                 slivers: [
                   SliverAppBar(
                     toolbarHeight: 10.0,
@@ -1854,7 +2061,7 @@ VALUES $values;
                                     Colors.transparent,
                                     Colors.black.withOpacity(0.3)
                                   ],
-                                  stops: [0.5, 1.0],
+                                  stops: const [0.5, 1.0],
                                 ),
                               ),
                             ),
@@ -1884,12 +2091,14 @@ VALUES $values;
                                         Center(
                                           child: StaticDigitalClock(),
                                         ),
-                                        Text("Today's Timeline",
-                                            style: TextStyle(
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 18,
-                                                color: Colors.white)),
-                                        const SizedBox(height: 10.0),
+                                        const Text(
+                                          "Today's Timeline",
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 18,
+                                            color: Colors.white,
+                                          ),
+                                        ),
                                         ..._buildTimelineForDay(focusedDay),
                                       ],
                                     ),
@@ -1928,23 +2137,6 @@ VALUES $values;
                               padding: const EdgeInsets.all(16.0),
                               child: eventWidgets[index],
                             ),
-                            Positioned(
-                              top: 8,
-                              right: 8,
-                              child: FloatingActionButton(
-                                mini: true,
-                                onPressed: () {
-                                  setState(() {
-                                    groupByCountry = !groupByCountry;
-                                    print(
-                                        "Toggle state updated: ${groupByCountry}");
-                                  });
-                                },
-                                child: Icon(
-                                    groupByCountry ? Icons.flag : Icons.title),
-                                tooltip: 'Toggle Grouping',
-                              ),
-                            ),
                           ],
                         );
                       },
@@ -1960,177 +2152,218 @@ VALUES $values;
     );
   }
 
+  Widget _buildSliverPersistentHeader2() {
+    return SliverPersistentHeader(
+      pinned: false,
+      floating: false,
+      delegate: _MySliverAppBarDelegate(
+        minHeight: 65.0,
+        maxHeight: 65.0,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 0.0),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.5), // Semi-transparent background
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Events for ${DateFormat('MMMM yyyy').format(_focusedDayNotifier.value)}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  color: Colors
+                      .white, // Text color to contrast with the background
+                ),
+              ),
+              FunctionalButton(
+                maxWidth: 170.0,
+                label: 'Toggle Grouping',
+                baseColor: Colors.white, // Example base color
+                icon: groupByCountry.value ? Icons.flag : Icons.title,
+                onPressed: () {
+                  setState(() {
+                    groupByCountry.value = !groupByCountry.value;
+                  });
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget buildCalendar() {
     return Container(
       key: _calendarKey,
-      child: LayoutBuilder(builder: (context, constraints) {
-        return Listener(
-          onPointerDown: (PointerDownEvent event) {
-            activePointerCount.value++;
-            print("Pointer count increased: $activePointerCount");
-          },
-          onPointerUp: (PointerUpEvent event) {
-            activePointerCount.value--;
-            print("Pointer count decreased: $activePointerCount");
-            if (activePointerCount.value < 2) {
-              _isScaling.value = false;
-            }
-          },
-          child: GestureDetector(
-            onScaleStart: (ScaleStartDetails details) {
-              if (details.pointerCount >= 2) {
-                setState(() {
-                  _isScaling.value = true;
-                  _initialScale = rowHeight / _initialRowHeight;
-                  print("Scaling started with two fingers");
-                });
-              }
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return Listener(
+            onPointerDown: (PointerDownEvent event) {
+              activePointerCount.value++;
+              print("Pointer count increased: ${activePointerCount.value}");
             },
-            onScaleUpdate: (ScaleUpdateDetails details) {
-              if (_isScaling.value && activePointerCount.value == 2) {
-                handleScaleUpdate(details);
-                print("Scaling... factor: ${details.scale}");
-              } else if (!_isScaling.value && activePointerCount.value == 1) {
-                handlePan(
-                  DragUpdateDetails(
-                    globalPosition: details.focalPoint,
-                    localPosition: details.localFocalPoint,
-                  ),
-                );
-              }
-            },
-            onScaleEnd: (ScaleEndDetails details) {
-              setState(() {
+            onPointerUp: (PointerUpEvent event) {
+              activePointerCount.value--;
+              print("Pointer count decreased: ${activePointerCount.value}");
+              if (activePointerCount.value < 2) {
                 _isScaling.value = false;
-                print("Scaling ended");
-              });
+              }
             },
-            child: Stack(
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 0.0),
-                      child: TableCalendar(
-                        locale: 'zh_CN',
-                        availableGestures: _isGroupSelectionEnabled
-                            ? AvailableGestures.none
-                            : AvailableGestures.none,
-                        rowHeight: rowHeight,
-                        firstDay: startDateTime,
-                        lastDay: endDateTime,
-                        focusedDay: _focusedDayNotifier.value,
-                        headerVisible: true,
-                        daysOfWeekStyle: DaysOfWeekStyle(
-                            decoration:
-                                BoxDecoration(color: Colors.transparent)),
-                        headerStyle: HeaderStyle(
-                          decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.6)),
-                          formatButtonShowsNext: false,
-                        ),
-                        calendarStyle: CalendarStyle(
-                            defaultDecoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.8))),
-                        calendarFormat: _calendarFormat,
-                        formatAnimationDuration:
-                            const Duration(milliseconds: 250),
-                        formatAnimationCurve: Curves.easeInOut,
-                        eventLoader: (day) => events[day] ?? [],
-                        onPageChanged: (focusedDay) {
-                          DateTime firstDayOfNewMonth =
-                              DateTime(focusedDay.year, focusedDay.month, 1);
-                          _focusedDayNotifier.value = firstDayOfNewMonth;
-                          _updateBackgroundImage();
-                        },
-                        calendarBuilders: CalendarBuilders(
-                          defaultBuilder: (context, date, _) => CalendarDayCell(
-                            date: date,
-                            isToday: isSameDay(date, DateTime.now()),
-                            selectedDaysNotifier: selectedDaysNotifier,
-                            isGroupSelectionEnabled: _isGroupSelectionEnabled,
-                            isFocused:
-                                isSameDay(date, _focusedDayNotifier.value),
-                            isHoliday: (DateTime date) {
-                              DateTime normalizedDate =
-                                  DateTime(date.year, date.month, date.day);
-                              return holidays.containsKey(normalizedDate);
-                            },
-                            DayEvents: getEventsForDay(date),
-                            onDayFocused: (DateTime focusedDate) {
-                              _focusedDayNotifier.value =
-                                  focusedDate; // Always update the focused day
-                              setState(() {
-                                // Toggle the selected state if group selection is enabled
-                                if (_isGroupSelectionEnabled) {
-                                  toggleSelectedDay(focusedDate);
-                                }
-                              });
-                            },
-                            onDaySelected: (DateTime selectedDate) {
-                              if (_isGroupSelectionEnabled) {
-                                toggleSelectedDay(
-                                    selectedDate); // Toggle selection when in group selection mode
-                              }
-                            },
-                            onDayDoubleTapped: (DateTime date) {
-                              _onDayCellTapped(context,
-                                  date); // Call the event creation or editing method on double tap
-                            },
-                            onDayLongPressed: (DateTime date) {
-                              print(
-                                  'Group selection prestate $_isGroupSelectionEnabled');
-                              setState(() {
-                                _isGroupSelectionEnabled =
-                                    true; // Enable group selection mode
-                                if (!selectedDays.contains(date)) {
-                                  selectedDays.add(
-                                      date); // Add the date to selected days if not already added
-                                }
-                                selectedDaysNotifier.value = Set.from(
-                                    selectedDays); // Update the notifier to refresh the UI
-                              });
-                              print(
-                                  'Group selection prestate $_isGroupSelectionEnabled');
-                            },
-                          ),
-                          selectedBuilder: null,
-                          todayBuilder: (context, date, events) =>
-                              _buildTodayCell(
-                            context,
-                            date,
-                            getEventsForDay(date),
-                          ),
-                          holidayBuilder: null,
-                          outsideBuilder: (context, date, _) =>
-                              _buildOutsideCell(context, date),
-                          rangeStartBuilder: null,
-                          rangeEndBuilder: null,
-                          withinRangeBuilder: null,
-                          disabledBuilder: null,
-                          markerBuilder: null,
-                        ),
-                        daysOfWeekHeight: 50,
-                      ),
+            child: GestureDetector(
+              onScaleStart: (ScaleStartDetails details) {
+                if (details.pointerCount >= 2) {
+                  setState(() {
+                    _isScaling.value = true;
+                    _initialScale = rowHeight / _initialRowHeight;
+                    print("Scaling started with two fingers");
+                  });
+                }
+              },
+              onScaleUpdate: (ScaleUpdateDetails details) {
+                if (_isScaling.value && activePointerCount.value == 2) {
+                  handleScaleUpdate(details);
+                  print("Scaling... factor: ${details.scale}");
+                } else if (!_isScaling.value && activePointerCount.value == 1) {
+                  handlePan(
+                    DragUpdateDetails(
+                      globalPosition: details.focalPoint,
+                      localPosition: details.localFocalPoint,
                     ),
-                  ],
-                ),
-                ValueListenableBuilder<Offset?>(
-                  valueListenable: _cursorPosition,
-                  builder: (context, cursorPosition, child) {
-                    return CursorPainterWidget(
-                      cursorPosition: cursorPosition ?? Offset.zero,
-                      radius: 20.0,
-                      color: Colors.red,
-                    );
-                  },
-                ),
-              ],
+                  );
+                }
+              },
+              onScaleEnd: (ScaleEndDetails details) {
+                setState(() {
+                  _isScaling.value = false;
+                  print("Scaling ended");
+                });
+              },
+              child: Stack(
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 0.0),
+                        child: TableCalendar(
+                          locale: 'zh_CN',
+                          availableGestures: _isGroupSelectionEnabled
+                              ? AvailableGestures.none
+                              : AvailableGestures.none,
+                          rowHeight: rowHeight,
+                          firstDay: startDateTime,
+                          lastDay: endDateTime,
+                          focusedDay: _focusedDayNotifier.value,
+                          headerVisible: true,
+                          daysOfWeekStyle: const DaysOfWeekStyle(
+                            decoration:
+                                BoxDecoration(color: Colors.transparent),
+                          ),
+                          headerStyle: HeaderStyle(
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.6),
+                            ),
+                            formatButtonShowsNext: false,
+                          ),
+                          calendarStyle: CalendarStyle(
+                            defaultDecoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.8),
+                            ),
+                          ),
+                          calendarFormat: _calendarFormat,
+                          formatAnimationDuration:
+                              const Duration(milliseconds: 250),
+                          formatAnimationCurve: Curves.easeInOut,
+                          eventLoader: (day) => events[day] ?? [],
+                          onPageChanged: (focusedDay) {
+                            DateTime firstDayOfNewMonth =
+                                DateTime(focusedDay.year, focusedDay.month, 1);
+                            _focusedDayNotifier.value = firstDayOfNewMonth;
+                            _updateBackgroundImage();
+                          },
+                          calendarBuilders: CalendarBuilders(
+                            defaultBuilder: (context, date, _) =>
+                                CalendarDayCell(
+                              date: date,
+                              isToday: isSameDay(date, DateTime.now()),
+                              selectedDaysNotifier: selectedDaysNotifier,
+                              isGroupSelectionEnabled: _isGroupSelectionEnabled,
+                              isFocused:
+                                  isSameDay(date, _focusedDayNotifier.value),
+                              isHoliday: (DateTime date) {
+                                DateTime normalizedDate =
+                                    DateTime(date.year, date.month, date.day);
+                                return holidays.containsKey(normalizedDate);
+                              },
+                              DayEvents: getEventsForDay(date),
+                              onDayFocused: (DateTime focusedDate) {
+                                _focusedDayNotifier.value = focusedDate;
+                                setState(() {
+                                  if (_isGroupSelectionEnabled) {
+                                    toggleSelectedDay(focusedDate);
+                                  }
+                                });
+                              },
+                              onDaySelected: (DateTime selectedDate) {
+                                if (_isGroupSelectionEnabled) {
+                                  toggleSelectedDay(selectedDate);
+                                }
+                              },
+                              onDayDoubleTapped: (DateTime date) {
+                                _onDayCellTapped(context, date);
+                              },
+                              onDayLongPressed: (DateTime date) {
+                                print(
+                                    'Group selection prestate $_isGroupSelectionEnabled');
+                                setState(() {
+                                  _isGroupSelectionEnabled = true;
+                                  if (!selectedDays.contains(date)) {
+                                    selectedDays.add(date);
+                                  }
+                                  selectedDaysNotifier.value =
+                                      Set.from(selectedDays);
+                                });
+                                print(
+                                    'Group selection prestate $_isGroupSelectionEnabled');
+                              },
+                            ),
+                            selectedBuilder: null,
+                            todayBuilder: (context, date, events) =>
+                                _buildTodayCell(
+                              context,
+                              date,
+                              getEventsForDay(date),
+                            ),
+                            holidayBuilder: null,
+                            outsideBuilder: (context, date, _) =>
+                                _buildOutsideCell(context, date),
+                            rangeStartBuilder: null,
+                            rangeEndBuilder: null,
+                            withinRangeBuilder: null,
+                            disabledBuilder: null,
+                            markerBuilder: null,
+                          ),
+                          daysOfWeekHeight: 50,
+                        ),
+                      ),
+                    ],
+                  ),
+                  ValueListenableBuilder<Offset?>(
+                    valueListenable: _cursorPosition,
+                    builder: (context, cursorPosition, child) {
+                      return CursorPainterWidget(
+                        cursorPositionNotifier: _cursorPosition,
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
-          ),
-        );
-      }),
+          );
+        },
+      ),
     );
   }
 
@@ -2228,8 +2461,10 @@ VALUES $values;
 
     // Automatically disable group selection if no dates are selected
     if (selectedDays.isEmpty) {
-      _isGroupSelectionEnabled = false;
-      print("Group selection disabled due to no selected dates.");
+      setState(() {
+        _isGroupSelectionEnabled = false;
+        print("Group selection disabled due to no selected dates.");
+      });
     }
   }
 
@@ -2249,11 +2484,13 @@ VALUES $values;
           events.cast<Event>(), // Cast dynamic to Event if your list is dynamic
       onDayFocused: (DateTime focusedDate) {
         _focusedDayNotifier.value = focusedDate;
-        setState(() {
-          if (_isGroupSelectionEnabled) {
-            toggleSelectedDay(focusedDate);
-          }
-        });
+        if (_isGroupSelectionEnabled) {
+          setState(() {
+            _isGroupSelectionEnabled = false;
+          });
+          print("Group selection disabled due to no selected dates.");
+          toggleSelectedDay(focusedDate);
+        }
       },
       onDaySelected: (DateTime selectedDate) {
         toggleSelectedDay(selectedDate);
@@ -2262,16 +2499,14 @@ VALUES $values;
         _onDayCellTapped(context, date);
       },
       onDayLongPressed: (DateTime date) {
-        setState(() {
-          _isGroupSelectionEnabled = true;
-          selectedDays.add(date);
-          selectedDaysNotifier.value = Set.from(selectedDays);
-        });
+        _isGroupSelectionEnabled = true;
+        selectedDays.add(date);
+        selectedDaysNotifier.value = Set.from(selectedDays);
       },
       backgroundColor: Colors.orange, // Custom color for today
       borderColor: Colors.deepOrange,
       textColor: Colors.white,
-      textStyle: TextStyle(
+      textStyle: const TextStyle(
         fontWeight: FontWeight.bold,
         fontSize: 16,
         color: Colors.white,
@@ -2286,7 +2521,8 @@ VALUES $values;
         color: Colors.yellow[200],
       ),
       child: Center(
-          child: Text('${date.day}', style: TextStyle(color: Colors.grey))),
+          child:
+              Text('${date.day}', style: const TextStyle(color: Colors.grey))),
     );
   }
 
@@ -2295,7 +2531,8 @@ VALUES $values;
     return Container(
       decoration: BoxDecoration(color: Colors.green[100]),
       child: Center(
-          child: Text('${date.day}', style: TextStyle(color: Colors.white))),
+          child:
+              Text('${date.day}', style: const TextStyle(color: Colors.white))),
     );
   }
 
@@ -2306,7 +2543,8 @@ VALUES $values;
         color: Colors.grey[400],
       ),
       child: Center(
-          child: Text('${date.day}', style: TextStyle(color: Colors.white))),
+          child:
+              Text('${date.day}', style: const TextStyle(color: Colors.white))),
     );
   }
 
@@ -2317,7 +2555,7 @@ VALUES $values;
       bool isMultiDay = typedEvents.any((Event event) =>
           event.endDate != null && !isSameDay(event.date, event.endDate));
       return AnimatedContainer(
-        duration: Duration(milliseconds: 300),
+        duration: const Duration(milliseconds: 300),
         decoration: BoxDecoration(
           color: isMultiDay ? Colors.blue[200] : Colors.blue,
           shape: BoxShape.rectangle,
@@ -2326,7 +2564,7 @@ VALUES $values;
         height: 16,
         child: Center(
             child: Text('${typedEvents.length}',
-                style: TextStyle(color: Colors.white))),
+                style: const TextStyle(color: Colors.white))),
       );
     }
     return null;
@@ -2338,26 +2576,24 @@ VALUES $values;
 
     return SingleChildScrollView(
       child: Container(
-        padding: EdgeInsets.all(8),
+        padding: const EdgeInsets.all(8),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
               date.day.toString(),
-              style: TextStyle(
+              style: const TextStyle(
                 fontWeight: FontWeight.bold,
                 fontSize: 16,
                 color: Colors.black,
               ),
             ),
-            if (hasEvent) Icon(Icons.event, size: 16, color: Colors.red),
-            ...dayEvents
-                .map((event) => Text(
-                      event.title,
-                      style: TextStyle(fontSize: 12),
-                      overflow: TextOverflow.ellipsis,
-                    ))
-                .toList(),
+            if (hasEvent) const Icon(Icons.event, size: 16, color: Colors.red),
+            ...dayEvents.map((event) => Text(
+                  event.title,
+                  style: const TextStyle(fontSize: 12),
+                  overflow: TextOverflow.ellipsis,
+                )),
           ],
         ),
       ),
@@ -2369,13 +2605,13 @@ VALUES $values;
     bool isSelected = isSameDay(_selectedDay, date);
 
     return AnimatedContainer(
-      duration: Duration(milliseconds: 300),
+      duration: const Duration(milliseconds: 300),
       curve: Curves.easeOut,
       decoration: BoxDecoration(
         color: isSelected ? Colors.blue : Colors.white,
         boxShadow: isSelected
             ? [
-                BoxShadow(
+                const BoxShadow(
                     color: Colors.blueAccent,
                     spreadRadius: 3,
                     blurRadius: 5,
@@ -2388,25 +2624,23 @@ VALUES $values;
           ? MediaQuery.of(context).size.width
           : MediaQuery.of(context).size.width / 7,
       height: isSelected ? 150 : 100,
-      padding: EdgeInsets.all(8),
+      padding: const EdgeInsets.all(8),
       child: SingleChildScrollView(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
               date.day.toString(),
-              style: TextStyle(
+              style: const TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,
                 fontSize: 16,
               ),
             ),
             if (dayEvents.isNotEmpty)
-              ...dayEvents
-                  .map((event) => Text(event.title,
-                      style: TextStyle(
-                          fontSize: 12, overflow: TextOverflow.ellipsis)))
-                  .toList(),
+              ...dayEvents.map((event) => Text(event.title,
+                  style: const TextStyle(
+                      fontSize: 12, overflow: TextOverflow.ellipsis))),
           ],
         ),
       ),
@@ -2464,15 +2698,16 @@ VALUES $values;
                     children: <Widget>[
                       TextField(
                         controller: titleController,
-                        decoration: InputDecoration(labelText: 'Event Title'),
+                        decoration:
+                            const InputDecoration(labelText: 'Event Title'),
                       ),
                       SwitchListTile(
-                        title: Text('Private Event'),
+                        title: const Text('Private Event'),
                         value: isPrivate,
                         onChanged: (value) => setState(() => isPrivate = value),
                       ),
                       SwitchListTile(
-                        title: Text('All Day Event'),
+                        title: const Text('All Day Event'),
                         value: isAllDay,
                         onChanged: (value) {
                           setState(() {
@@ -2486,14 +2721,14 @@ VALUES $values;
                       ),
                       if (!isAllDay) ...[
                         TextField(
-                          decoration:
-                              InputDecoration(labelText: "Start Time (HH:MM)"),
+                          decoration: const InputDecoration(
+                              labelText: "Start Time (HH:MM)"),
                           controller:
                               TextEditingController(text: pickedStartTime),
                           onTap: () async {
                             TimeOfDay? pickedTime = await showTimePicker(
                               context: context,
-                              initialTime: TimeOfDay(hour: 0, minute: 0),
+                              initialTime: const TimeOfDay(hour: 0, minute: 0),
                             );
                             if (pickedTime != null) {
                               setState(() {
@@ -2504,14 +2739,14 @@ VALUES $values;
                           },
                         ),
                         TextField(
-                          decoration:
-                              InputDecoration(labelText: "End Time (HH:MM)"),
+                          decoration: const InputDecoration(
+                              labelText: "End Time (HH:MM)"),
                           controller:
                               TextEditingController(text: pickedEndTime),
                           onTap: () async {
                             TimeOfDay? pickedTime = await showTimePicker(
                               context: context,
-                              initialTime: TimeOfDay(hour: 0, minute: 0),
+                              initialTime: const TimeOfDay(hour: 0, minute: 0),
                             );
                             if (pickedTime != null) {
                               setState(() {
@@ -2527,11 +2762,11 @@ VALUES $values;
                 ),
                 actions: <Widget>[
                   TextButton(
-                    child: Text("Cancel"),
+                    child: const Text("Cancel"),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                   TextButton(
-                    child: Text("Save"),
+                    child: const Text("Save"),
                     onPressed: () async {
                       DateTime startDate = dateGroup.first;
                       DateTime endDate = dateGroup.last;
@@ -2550,7 +2785,6 @@ VALUES $values;
                       if (mode == "offline") {
                         await DatabaseHelper.instance.insertEvent(newEvent);
                         await _loadDataFromSQLite(startDateTime, endDateTime);
-                        ;
                         print("Event saved to SQLite in offline mode.");
                       } else {
                         print("Event added temporarily in online mode.");
@@ -2568,23 +2802,6 @@ VALUES $values;
     }
   }
   //end of the calendar page
-}
-
-class StaticDigitalClock extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 200,
-      child: DigitalClock(
-        hourMinuteDigitTextStyle: const TextStyle(fontSize: 100),
-        colon: const Icon(Icons.ac_unit_sharp, size: 35),
-        colonDecoration: BoxDecoration(
-          border: Border.all(),
-          shape: BoxShape.circle,
-        ),
-      ),
-    );
-  }
 }
 
 class CalendarDayCell extends StatelessWidget {
@@ -2608,7 +2825,7 @@ class CalendarDayCell extends StatelessWidget {
   final TextStyle textStyle;
 
   const CalendarDayCell({
-    Key? key,
+    super.key,
     required this.date,
     required this.isToday,
     this.isFocused = false,
@@ -2629,7 +2846,7 @@ class CalendarDayCell extends StatelessWidget {
       fontWeight: FontWeight.bold,
       fontSize: 16,
     ),
-  }) : super(key: key);
+  });
 
   static bool _defaultIsHoliday(DateTime date) => false;
 
@@ -2649,7 +2866,7 @@ class CalendarDayCell extends StatelessWidget {
 
     int eventCount = DayEvents.length;
     bool allowInteractions = context
-            .findAncestorStateOfType<CalendarPageState>()!
+            .findAncestorStateOfType<_CalendarPageState>()!
             .activePointerCount
             .value <
         2;
@@ -2661,8 +2878,8 @@ class CalendarDayCell extends StatelessWidget {
         bool isHolidayDay = isHoliday?.call(date) ?? false;
         bool isCurrentlyFocused = isFocused ?? false;
 
-        DateTime prevDay = date.subtract(Duration(days: 1));
-        DateTime nextDay = date.add(Duration(days: 1));
+        DateTime prevDay = date.subtract(const Duration(days: 1));
+        DateTime nextDay = date.add(const Duration(days: 1));
         bool isRangeStart = isSelected && !selectedDays.contains(prevDay);
         bool isRangeEnd = isSelected && !selectedDays.contains(nextDay);
 
@@ -2675,13 +2892,13 @@ class CalendarDayCell extends StatelessWidget {
 
         Offset shadowOffset;
         if (isRangeStart && isRangeEnd) {
-          shadowOffset = Offset(0, 0);
+          shadowOffset = const Offset(0, 0);
         } else if (isRangeStart) {
-          shadowOffset = Offset(-4, 0);
+          shadowOffset = const Offset(-4, 0);
         } else if (isRangeEnd) {
-          shadowOffset = Offset(4, 0);
+          shadowOffset = const Offset(4, 0);
         } else {
-          shadowOffset = Offset(0, 0);
+          shadowOffset = const Offset(0, 0);
         }
 
         List<BoxShadow> boxShadow = isSelected
@@ -2700,26 +2917,24 @@ class CalendarDayCell extends StatelessWidget {
         if (flagUrls.isNotEmpty) {
           backgroundWidget = Stack(
             children: [
-              ClipRect(
-                child: OverflowBox(
-                  minWidth: 0.0,
-                  minHeight: 0.0,
-                  maxWidth: double.infinity,
-                  maxHeight: double.infinity,
-                  child: Transform(
-                    alignment: Alignment.center,
-                    transform: Matrix4.identity()
-                      ..scale(1.0, 2.0), // Flip horizontally
-                    child: Opacity(
-                      opacity: 0.8,
-                      child: Image.network(flagUrls.first, fit: BoxFit.cover),
+              Container(color: backgroundColor), // Base background color
+              Align(
+                alignment: Alignment.center,
+                child: Container(
+                  width: 35.0, // Width of the bubble
+
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    image: DecorationImage(
+                      image: NetworkImage(flagUrls.first),
+                      fit: BoxFit.cover,
                     ),
                   ),
                 ),
               ),
               if (isSelected || isCurrentlyFocused)
                 Container(
-                  color: Colors.black.withOpacity(0.3),
+                  color: Colors.white.withOpacity(0.3),
                 ),
             ],
           );
@@ -2746,7 +2961,7 @@ class CalendarDayCell extends StatelessWidget {
 
         // Determine the final border width
         double finalBorderWidth =
-            isSelected || isHolidayDay || isCurrentlyFocused ? 1.0 : 0.0;
+            isSelected || isHolidayDay || isCurrentlyFocused ? 0.0 : 0.0;
 
         // Determine the final border color
         Color finalBorderColor;
@@ -2781,10 +2996,19 @@ class CalendarDayCell extends StatelessWidget {
               children: [
                 backgroundWidget,
                 Center(
-                  child: Text(
-                    '${date.day}',
-                    style: textStyle.copyWith(
-                      color: isSelected ? Colors.white : textColor,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.all(10.0), // Adjust padding as needed
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white
+                          .withOpacity(0.3), // Semi-transparent background
+                    ),
+                    child: Text(
+                      '${date.day}',
+                      style: textStyle.copyWith(
+                        color: isSelected ? Colors.white : textColor,
+                      ),
                     ),
                   ),
                 ),
@@ -2802,14 +3026,14 @@ class CalendarDayCell extends StatelessWidget {
       right: 2,
       bottom: 2,
       child: Container(
-        padding: EdgeInsets.all(4),
-        decoration: BoxDecoration(
+        padding: const EdgeInsets.all(4),
+        decoration: const BoxDecoration(
           color: Colors.red,
           shape: BoxShape.circle,
         ),
         child: Text(
           '$eventCount',
-          style: TextStyle(color: Colors.white, fontSize: 12),
+          style: const TextStyle(color: Colors.white, fontSize: 12),
         ),
       ),
     );
@@ -2840,5 +3064,66 @@ class _MySliverAppBarDelegate extends SliverPersistentHeaderDelegate {
     return maxHeight != oldDelegate.maxHeight ||
         minHeight != oldDelegate.minHeight ||
         child != oldDelegate.child;
+  }
+}
+
+class _AnimatedEventList extends StatefulWidget {
+  final List<Event> dayEvents;
+
+  const _AnimatedEventList({required this.dayEvents});
+
+  @override
+  __AnimatedEventListState createState() => __AnimatedEventListState();
+}
+
+class __AnimatedEventListState extends State<_AnimatedEventList> {
+  int _currentIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    Timer.periodic(const Duration(seconds: 3), (timer) {
+      if (mounted) {
+        setState(() {
+          _currentIndex = (_currentIndex + 1) % widget.dayEvents.length;
+        });
+      }
+    });
+  }
+
+  TimeOfDay? parseTime(String? time) {
+    if (time == null || time.isEmpty) return null;
+    final parts = time.split(':');
+    if (parts.length != 2) return null;
+    final hour = int.tryParse(parts[0]);
+    final minute = int.tryParse(parts[1]);
+    if (hour == null || minute == null) return null;
+    return TimeOfDay(hour: hour, minute: minute);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final event = widget.dayEvents[_currentIndex];
+    TimeOfDay? startTime = parseTime(event.startTime);
+    TimeOfDay? endTime = parseTime(event.endTime);
+    String startTimeString = startTime != null ? startTime.format(context) : '';
+    String endTimeString = endTime != null ? endTime.format(context) : '';
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 500),
+      child: ListTile(
+        key: ValueKey<int>(_currentIndex),
+        leading: Text(startTimeString),
+        title: Row(
+          children: [
+            if (event.flagUrl != null)
+              Image.network(event.flagUrl!, width: 20, height: 20),
+            const SizedBox(width: 8),
+            Text(event.title),
+          ],
+        ),
+        trailing: Text(endTimeString),
+      ),
+    );
   }
 }

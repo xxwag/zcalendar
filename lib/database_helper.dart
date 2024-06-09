@@ -10,9 +10,7 @@ class DatabaseHelper {
   static const String dbName = 'company_calendar.db';
 
   Future<Database> get database async {
-    if (_database == null) {
-      _database = await initializeDB();
-    }
+    _database ??= await initializeDB();
     return _database!;
   }
 
